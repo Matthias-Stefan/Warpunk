@@ -1,0 +1,34 @@
+#include "source/platform/mouse.h" 
+
+#include "source/core/types.h"
+
+//////////////////////////////////////////////////////////////////////
+
+bool mouse::IsPressedOnce(mouse_buttons MouseButton)
+{
+    return State[MouseButton].IsDown && !(State[MouseButton].WasDown);
+}
+
+//////////////////////////////////////////////////////////////////////
+
+bool mouse::IsPressed(mouse_buttons MouseButton)
+{
+    return State[MouseButton].IsDown || State[MouseButton].WasDown; 
+}
+
+//////////////////////////////////////////////////////////////////////
+
+bool mouse::IsDragging(mouse_buttons MouseButton)
+{
+    return State[MouseButton].IsDragging;
+}
+
+//////////////////////////////////////////////////////////////////////
+
+bool mouse::IsWheelTurned()
+{
+    return false;
+}
+
+
+//////////////////////////////////////////////////////////////////////

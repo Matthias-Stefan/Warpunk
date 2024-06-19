@@ -1,0 +1,7 @@
+build
+build/*
+assets
+assets/*
+misc/references
+.vs
+.vs/*
