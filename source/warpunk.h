@@ -1,12 +1,7 @@
-/* ========================================================================
-   $File: warpunk.h $
-   $Date: 29.10.2023 $
-   $Creator: Matthias Stefan $
-   ======================================================================== */
+#pragma once
 
-#ifndef WARPUNK_H
-#define WARPUNK_H
-
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <limits>
 
 #include "source/core/math.h"
@@ -14,8 +9,6 @@
 
 #include "warpunk_world.h"
 #include "warpunk_camera.h"
-
-struct visual_component; 
 
 struct game_state
 {
@@ -27,34 +20,33 @@ struct entity
 {
     s32 ID;
     b32 IsSelected;
-    v3<f32> Pos;
+    glm::vec3 Pos;
     
     f32 Orientation;
-    v2<s32> Geo;
+    glm::vec2 Geo;
     
     const char *GeoPath;
     const char *TexturePath;
-    visual_component *VisualComponent;
     
-    v3<f32> Acceleration;
-    v3<f32> Velocity;
+    glm::vec3 Acceleration;
+    glm::vec3 Velocity;
     
-    static_queue<v3<f32>, 256> QueuedPos;
+    static_queue<glm::vec3, 256> QueuedPos;
 };
 
 struct aabb
 {
-    v2<f32> Min = { FLT_MAX, FLT_MAX }; // BottomLeft
-    v2<f32> Max = { -FLT_MAX, -FLT_MAX }; // TopRight
+    glm::vec2 Min = { FLT_MAX, FLT_MAX }; // BottomLeft
+    glm::vec2 Max = { -FLT_MAX, -FLT_MAX }; // TopRight
 };
 
 inline f32  
-RayIntersectsAABB(v2<f32> RayOrigin, v2<f32> RayD, aabb *Box)
+RayIntersectsAABB(glm::vec2 RayOrigin, glm::vec2 RayD, aabb *Box)
 {
-    v2<f32> InvRayD = 1.0f / RayD;
+    glm::vec2 InvRayD = 1.0f / RayD;
     
-    v2<f32> tBoxMin = (Box->Min - RayOrigin) * InvRayD;
-    v2<f32> tBoxMax = (Box->Max - RayOrigin) * InvRayD;
+    glm::vec2 tBoxMin = (Box->Min - RayOrigin) * InvRayD;
+    glm::vec2 tBoxMax = (Box->Max - RayOrigin) * InvRayD;
     
     f32 tMin = Max(Min(tBoxMin.x, tBoxMax.x), 
                    Min(tBoxMin.y, tBoxMax.y));
@@ -71,20 +63,19 @@ RayIntersectsAABB(v2<f32> RayOrigin, v2<f32> RayD, aabb *Box)
 }
 
 inline b32 
-SegmentIntersectsAABB(v2<f32> OriginP, v2<f32> DestP, aabb* Box) 
+SegmentIntersectsAABB(glm::vec2 OriginP, glm::vec2 DestP, aabb* Box)
 {
 #if 0
     *Near = { FLT_MAX, FLT_MAX };
     *Far = { FLT_MAX, FLT_MAX };
 #endif
     
-    v2<f32> InvRayD = DestP - OriginP;
-    InvRayD = Normalize(InvRayD);
-    InvRayD.E[0] = (InvRayD.x != 0.0f) ? 1.0f / InvRayD.x : 0.0f;
-    InvRayD.E[1] = (InvRayD.y != 0.0f) ? 1.0f / InvRayD.y : 0.0f;
+    glm::vec2 InvRayD = glm::normalize(DestP - OriginP);
+    InvRayD.x = (InvRayD.x != 0.0f) ? 1.0f / InvRayD.x : 0.0f;
+    InvRayD.y = (InvRayD.y != 0.0f) ? 1.0f / InvRayD.y : 0.0f;
     
-    v2<f32> tBoxMin = (Box->Min - OriginP) * InvRayD;
-    v2<f32> tBoxMax = (Box->Max - OriginP) * InvRayD;
+    glm::vec2 tBoxMin = (Box->Min - OriginP) * InvRayD;
+    glm::vec2 tBoxMax = (Box->Max - OriginP) * InvRayD;
     
     f32 tMin = Max(Min(tBoxMin.x, tBoxMax.x), 
                    Min(tBoxMin.y, tBoxMax.y));
@@ -96,7 +87,8 @@ SegmentIntersectsAABB(v2<f32> OriginP, v2<f32> DestP, aabb* Box)
     {
         f32 t = (tMin < 0.0f) ? tMax : tMin;
         
-        f32 SqDist = MagnitudeSq(DestP - OriginP);
+        glm::vec2 Diff = DestP - OriginP;
+        f32 SqDist = glm::dot(Diff, Diff);
         if (t > 0.0f && (t * t) < SqDist)
         {
 #if 0
@@ -121,7 +113,7 @@ struct connection;
 struct node
 {
     u64 ID;
-    v2<f32> Pos;
+    glm::vec2 Pos;
     bool IsTarget;
     
     node *Prev;
@@ -155,5 +147,3 @@ AssignRoute(entity *Entity, node *Node)
     
     Entity->QueuedPos.Enqueue({ Node->Pos.x, Node->Pos.y, 0.0f });
 }
-
-#endif //WARPUNK_H

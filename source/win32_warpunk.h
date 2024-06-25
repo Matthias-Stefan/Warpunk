@@ -3,6 +3,8 @@
 #include "source/core/types.h"
 #include "source/platform/platform.h"
 
+struct glb;
+
 struct win32_offscreen_buffer
 {
     BITMAPINFO Info;
@@ -39,8 +41,16 @@ struct win32_state
 };
 
 PLATFORM_ERROR_MESSAGE(Win32ErrorMessage);
+
 internal PLATFORM_CREATE_WORK_QUEUE(Win32CreateWorkQueue);
 internal PLATFORM_WORK_QUEUE_CALLBACK(Win32WorkQueueCallback);
 internal PLATFORM_ADD_WORK_QUEUE_ENTRY(Win32AddWorkQueueEntry);
 internal PLATFORM_DO_NEXT_WORK_QUEUE_ENTRY(Win32DoNextWorkQueueEntry);
 internal PLATFORM_COMPLETE_ALL_WORK(Win32CompleteAllWork);
+
+internal PLATFORM_ALLOCATE_MEMORY(Win32AllocateMemory);
+internal PLATFORM_DEALLOCATE_MEMORY(Win32DeallocateMemory);
+internal PLATFORM_ENLARGE_MEMORY(Win32EnlargeMemory);
+
+internal PLATFORM_LOAD_ASSET(Win32LoadAsset);
+internal PLATFORM_UNLOAD_ASSET(Win32UnloadAsset);

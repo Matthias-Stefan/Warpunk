@@ -1,8 +1,8 @@
 #pragma once
 
-#include "source/core/memory.h"
 #include "source/core/types.h"
-
+#include "source/core/util.h"
+#include "source/platform/asset.h"
 #include "source/platform/mouse.h"
 #include "source/platform/keyboard.h"
 #include "source/platform/thread_pool.h"
@@ -55,37 +55,46 @@ typedef PLATFORM_COMPLETE_ALL_WORK(platform_complete_all_work);
 
 /// Memory allocation services
 
-#define PLATFORM_ALLOCATE_MEMORY(name) memory_block* name(u64 Size, char *Name)
+struct memory_block;
+
+#define PLATFORM_ALLOCATE_MEMORY(name) void name(memory_block* Memory, u64 Size)
 typedef PLATFORM_ALLOCATE_MEMORY(platform_allocate_memory);
 
-#define PLATFORM_DEALLOCATE_MEMORY(name) void name(memory_block *Memory);
+#define PLATFORM_DEALLOCATE_MEMORY(name) void name(memory_block *Memory)
 typedef PLATFORM_DEALLOCATE_MEMORY(platform_deallocate_memory);
+
+#define PLATFORM_ENLARGE_MEMORY(name) void name(memory_block *Memory, size_t Size)
+typedef PLATFORM_ENLARGE_MEMORY(platform_enlarge_memory);
 
 /// Audio services
 
-#define PLATFORM_INITIALIZE_AUDIO(name)
+// TODO(matthias) implemention
+#define PLATFORM_INITIALIZE_AUDIO(name) void name()
 typedef PLATFORM_INITIALIZE_AUDIO(platform_initialize_audio);
 
-#define PLATFORM_PREPARE_AUDIO(name)
+// TODO(matthias) implemention
+#define PLATFORM_PREPARE_AUDIO(name) void name()
 typedef PLATFORM_PREPARE_AUDIO(platform_prepare_audio);
 
-#define PLATFORM_PLAY_AUDIO(name)
+// TODO(matthias) implemention
+#define PLATFORM_PLAY_AUDIO(name) void name()
 typedef PLATFORM_PLAY_AUDIO(platform_play_audio);
 
-#define PLATFORM_STOP_AUDIO(name)
+// TODO(matthias) implemention
+#define PLATFORM_STOP_AUDIO(name) void name()
 typedef PLATFORM_STOP_AUDIO(platform_stop_audio);
 
-#define PLATFORM_GET_AUDIO_SAMPLE(name)
+// TODO(matthias) implemention
+#define PLATFORM_GET_AUDIO_SAMPLE(name) void name()
 typedef PLATFORM_GET_AUDIO_SAMPLE(platform_get_audio_sample);
 
-/// glb/glTF services
+/// Asset loading services
 
-struct glb;
-#define PLATFORM_LOAD_GLB(name) glb name(char *Filename)
-typedef PLATFORM_LOAD_GLB(platform_load_gltf);
+#define PLATFORM_LOAD_ASSET(name) asset* name(char *Filename, memory_block *Memory)
+typedef PLATFORM_LOAD_ASSET(platform_load_asset);
 
-#define PLATFORM_UNLOAD_GLB(name) void name(glb *GLB)
-typedef PLATFORM_UNLOAD_GLB(platform_unload_gltf);
+#define PLATFORM_UNLOAD_ASSET(name) void name(asset *Asset)
+typedef PLATFORM_UNLOAD_ASSET(platform_unload_asset);
 
 typedef struct platform_api
 {
@@ -94,9 +103,11 @@ typedef struct platform_api
 
     platform_allocate_memory *AllocateMemory;
     platform_deallocate_memory *DeallocateMemory;
+    platform_enlarge_memory *EnlargeMemory;
 
-    platform_load_gltf *LoadglTF;
-    platform_unload_gltf *UnloadglTF;
+    platform_load_asset *LoadAsset;
+    platform_unload_asset *UnloadAsset;
+
 } platform_api;
 extern platform_api Platform;
 
@@ -147,3 +158,89 @@ typedef GAME_INITIALIZE(game_initialize);
 
 #define GAME_UPDATE_AND_RENDER(name) void name(game_context *GameContext, game_input *Input, game_debug_info *DebugInfo)
 typedef GAME_UPDATE_AND_RENDER(game_update_and_render);
+
+/// Memory
+
+struct memory_block
+{
+    u64 Allocated = 0;
+    u64 Used = 0;
+    void *Data = nullptr;
+    char *Name = nullptr;
+
+    template<typename T>
+    T *PushSize(u64 Size)
+    {
+        Assert((Used + Size) <= Allocated);
+
+        u8 *Result = (u8 *)Data + Used;
+        Used += Size;
+
+        return (T *)Result;
+    }
+
+    void PopSize(u64 Size)
+    {
+        Used -= Size;
+    }
+
+    template<typename T>
+    T *PushStruct()
+    {
+        return PushSize<T>(sizeof(T));
+    }
+
+    template<typename T>
+    void PopStruct()
+    {
+        PopSize(sizeof(T));
+    }
+
+    template<typename T>
+    T *PushArray(u64 Size)
+    {
+        return PushSize<T>(sizeof(T) * Size);
+    }
+
+    template<typename T>
+    void PopArray(u64 Size)
+    {
+        PopSize(sizeof(T) * Size);
+    }
+};
+
+template<typename T>
+struct temporary_memory_block
+{
+    memory_block Memory;
+    T *Data = (T *)Memory.Data;
+};
+
+template<typename T>
+internal void
+StartTemporaryMemory(temporary_memory_block<T> *TemporaryMemory,
+                     size_t Size,
+                     platform_allocate_memory *AllocationCallback)
+{
+    AllocationCallback(&TemporaryMemory->Memory, Size * sizeof(T));
+    TemporaryMemory->Data = (T *)TemporaryMemory->Memory.Data;
+}
+
+template<typename T>
+internal void
+EndTemporaryMemory(temporary_memory_block<T> *TemporaryMemory,
+                   platform_deallocate_memory *DeallocationCallback)
+{
+    DeallocationCallback(&TemporaryMemory->Memory);
+    TemporaryMemory->Data = nullptr;
+}
+
+template<typename T>
+internal void
+EnlargeTemporaryMemory(temporary_memory_block<T> *TemporaryMemory,
+                       size_t Size,
+                       platform_enlarge_memory *EnlargeCallback)
+{
+    EnlargeCallback(&TemporaryMemory->Memory, Size * sizeof(T));
+    TemporaryMemory->Data = (T *)TemporaryMemory->Memory.Data;
+}

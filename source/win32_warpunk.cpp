@@ -1,17 +1,21 @@
-/* ========================================================================
-   $File: win32_warpunk.cpp $
-   $Date: 21.10.2023 $
-   $Creator: Matthias Stefan $
-   ======================================================================== */
-
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <stdio.h>
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <vulkan/vulkan.h>
+
 #include <windows.h>
 #include <windowsx.h>
 #include <xaudio2.h>
+
+#define TINYOBJLOADER_IMPLEMENTATION
+#include "tiny_obj_loader.h"
+
+#define TINYGLTF_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "source/thirdparty/tiny_gltf.h"
 
 #include <queue>
 
@@ -29,13 +33,9 @@
 #include "imgui/imgui_demo.cpp"
 #endif
 
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
-#define TINYOBJLOADER_IMPLEMENTATION
-#include "tiny_obj_loader.h"
+
 
 #include "source/core/math.h"
-#include "source/core/memory.h"
 #include "source/core/types.h"
 
 #include "win32_warpunk.h"
@@ -197,11 +197,12 @@ PLATFORM_READ_DATA_FROM_FILE(Win32ReadFileBinary)
 /// Rendering
 
 internal void
-Win32InitializeVulkan(HDC DeviceContext, HWND Window, HINSTANCE Instance, memory_block *RendererMemory)
+Win32InitializeVulkan(HDC DeviceContext, HWND Window, HINSTANCE Instance, memory_block *RendererMemory, platform_api *PlatformAPI)
 {
     VulkanContext = {};
     VulkanContext.GraphicsMemoryBlock = RendererMemory; 
-    
+    VulkanContext.PlatformAPI = PlatformAPI;
+
     //DEBUGGetVertices(&VulkanContext); 
     
     CreateInstance(&VulkanContext);
@@ -226,6 +227,7 @@ Win32InitializeVulkan(HDC DeviceContext, HWND Window, HINSTANCE Instance, memory
     CreateTextureImage(&VulkanContext, "W:/Warpunk/assets/textures/viking_room.png");
     CreateTextureImageView(&VulkanContext);
     CreateTextureSampler(&VulkanContext);
+    Win32LoadAsset("W:/Warpunk/assets/gltf/2CylinderEngine.glb", RendererMemory);
     LoadModel(&VulkanContext, "W:/Warpunk/assets/geo/untitled.obj");
     CreateVertexBuffer(&VulkanContext);
     CreateIndexBuffer(&VulkanContext);
@@ -981,18 +983,547 @@ internal PLATFORM_COMPLETE_ALL_WORK(Win32CompleteAllWork)
     Queue->CompletionCount = 0;
 }
 
-/// glb
+/// Memory allocation services
 
-internal PLATFORM_LOAD_GLB(Win32LoadGLB)
+internal PLATFORM_ALLOCATE_MEMORY(Win32AllocateMemory)
 {
-
+    Memory->Allocated = Size;
+    Memory->Used = 0;
+#if defined(_WIN32) || defined(_WIN64)
+    Memory->Data = (void *)VirtualAlloc(NULL, Memory->Allocated, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+#elif defined(__linux__)
+    Memory->Data = (void *)mmap(NULL, Memory->Allocated, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+#endif
+    Assert(Memory->Data != nullptr);
 }
 
-internal PLATFORM_UNLOAD_GLB(Win32UnloadGLB)
+internal PLATFORM_DEALLOCATE_MEMORY(Win32DeallocateMemory)
 {
+    if (Memory->Data)
+    {
+        if (Memory->Data)
+        {
+#if defined(_WIN32) || defined(_WIN64)
+            VirtualFree(Memory->Data, 0, MEM_RELEASE);
+#elif defined(__linux__)
+            munmap(Memory->Data, Allocated);
+#endif
+        }
 
+        Memory->Allocated = 0;
+        Memory->Used = 0;
+        Memory->Data = nullptr;
+    }
 }
 
+internal PLATFORM_ENLARGE_MEMORY(Win32EnlargeMemory)
+{
+    size_t NewAllocationSize = Memory->Allocated + Size;
+    if (Memory->Data)
+    {
+#if defined(_WIN32) || defined(_WIN64)
+        void *Temp = (void *)VirtualAlloc(NULL, NewAllocationSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+#elif defined(__linux__)
+        void *Temp = (void *)mmap(NULL, NewAllocationSize, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+#endif
+
+        Assert(Temp != nullptr);
+        memcpy(Temp, Memory->Data, Memory->Allocated);
+
+#if defined(_WIN32) || defined(_WIN64)
+        VirtualFree(Memory->Data, 0, MEM_RELEASE);
+#elif defined(__linux__)
+        munmap(Memory->Data, Memory->Allocated);
+#endif
+
+        Memory->Allocated = NewAllocationSize;
+        Memory->Data = Temp;
+    }
+    else
+    {
+        Win32AllocateMemory(Memory, Size);
+    }
+}
+
+/// Asset loading services
+
+inline u32
+glTFGetComponentSize(s32 ComponentType)
+{
+    u32 Result = 0;
+
+    switch (ComponentType)
+    {
+        case TINYGLTF_COMPONENT_TYPE_BYTE:
+        {
+            Result = sizeof(char);
+        } break;
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
+        {
+            Result = sizeof(unsigned char);
+        } break;
+        case TINYGLTF_COMPONENT_TYPE_SHORT:
+        {
+            Result = sizeof(short);
+        } break;
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
+        {
+            Result = sizeof(unsigned short);
+        } break;
+        case TINYGLTF_COMPONENT_TYPE_INT:
+        {
+            Result = sizeof(int);
+        } break;
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
+        {
+            Result = sizeof(unsigned int);
+        } break;
+        case TINYGLTF_COMPONENT_TYPE_FLOAT:
+        {
+            Result = sizeof(float);
+        } break;
+        case TINYGLTF_COMPONENT_TYPE_DOUBLE:
+        {
+            Result = sizeof(double);
+        } break;
+    }
+
+    return Result;
+}
+
+template <typename T, typename S>
+inline S
+glTFGetBufferValue_(tinygltf::Buffer *Buffer,
+                    tinygltf::BufferView *BufferView,
+                    size_t Index)
+{
+    S Result = static_cast<S>(*reinterpret_cast<T *>(&Buffer->data[Index]));
+    return Result;
+}
+
+template <typename S>
+inline S
+glTFGetBufferValue(s32 ComponentType,
+                   tinygltf::Buffer *Buffer,
+                   tinygltf::BufferView *BufferView,
+                   size_t Index)
+{
+    S Result;
+
+    switch (ComponentType)
+    {
+        case TINYGLTF_COMPONENT_TYPE_BYTE:
+        {
+            Result = glTFGetBufferValue_<char, S>(Buffer, BufferView, Index);
+        } break;
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
+        {
+            Result = glTFGetBufferValue_<unsigned char, S>(Buffer, BufferView, Index);
+        } break;
+        case TINYGLTF_COMPONENT_TYPE_SHORT:
+        {
+            Result = glTFGetBufferValue_<short, S>(Buffer, BufferView, Index);
+        } break;
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
+        {
+            Result = glTFGetBufferValue_<unsigned short, S>(Buffer, BufferView, Index);
+        } break;
+        case TINYGLTF_COMPONENT_TYPE_INT:
+        {
+            Result = glTFGetBufferValue_<int, S>(Buffer, BufferView, Index);
+        } break;
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
+        {
+            Result = glTFGetBufferValue_<unsigned int, S>(Buffer, BufferView, Index);
+        } break;
+        case TINYGLTF_COMPONENT_TYPE_FLOAT:
+        {
+            Result = glTFGetBufferValue_<float, S>(Buffer, BufferView, Index);
+        } break;
+        case TINYGLTF_COMPONENT_TYPE_DOUBLE:
+        {
+            Result = glTFGetBufferValue_<double, S>(Buffer, BufferView, Index);
+        } break;
+    }
+
+    return Result;
+}
+
+internal PLATFORM_LOAD_ASSET(Win32LoadAsset)
+{
+#if true
+    tinygltf::TinyGLTF TinyLoader;
+
+    std::string Error;
+    std::string Warning;
+    tinygltf::Model TinyModel;
+    if (!TinyLoader.LoadBinaryFromFile(&TinyModel, &Error, &Warning, Filename))
+    {
+        Win32ErrorMessage(PlatformError_Nonfatal, "Failed to load gltf.");
+    }
+#endif
+
+    asset *Result = Memory->PushStruct<asset>();
+    *Result = {};
+    Result->Id = 0;
+    
+    u32 MeshCount = 0;
+    for (size_t NodeIndex = 0; NodeIndex < TinyModel.nodes.size(); ++NodeIndex)
+    {
+        tinygltf::Node TinyNode = TinyModel.nodes[NodeIndex];
+
+        if (TinyNode.mesh < 0) // this node is not a mesh
+        {
+            continue;
+        }
+
+        MeshCount++;
+    }
+
+    Result->Meshes = Memory->PushArray<mesh>(MeshCount);
+    Result->Size += sizeof(mesh) * MeshCount;
+
+    for (size_t NodeIndex = 0, AssetIndex = 0;
+         NodeIndex < TinyModel.nodes.size();
+         ++NodeIndex)
+    {
+        tinygltf::Node TinyNode = TinyModel.nodes.at(NodeIndex);
+
+        if (TinyNode.mesh < 0) // this node is not a mesh
+        {
+            continue;
+        }
+
+        glm::mat4 Matrix(1.0f);
+        if (TinyNode.matrix.size() > 0) // no identity matrix
+        {
+            Assert(TinyNode.matrix.size() == 16);
+
+            Matrix[0][0] = (f32)TinyNode.matrix[0];
+            Matrix[0][1] = (f32)TinyNode.matrix[1];
+            Matrix[0][2] = (f32)TinyNode.matrix[2];
+            Matrix[0][3] = (f32)TinyNode.matrix[3];
+
+            Matrix[1][0] = (f32)TinyNode.matrix[4];
+            Matrix[1][1] = (f32)TinyNode.matrix[5];
+            Matrix[1][2] = (f32)TinyNode.matrix[6];
+            Matrix[1][3] = (f32)TinyNode.matrix[7];
+
+            Matrix[2][0] = (f32)TinyNode.matrix[8];
+            Matrix[2][1] = (f32)TinyNode.matrix[9];
+            Matrix[2][2] = (f32)TinyNode.matrix[10];
+            Matrix[2][3] = (f32)TinyNode.matrix[11];
+
+            Matrix[3][0] = (f32)TinyNode.matrix[12];
+            Matrix[3][1] = (f32)TinyNode.matrix[13];
+            Matrix[3][2] = (f32)TinyNode.matrix[14];
+            Matrix[3][3] = (f32)TinyNode.matrix[15];
+        }
+        else
+        {
+            glm::mat4 MatrixScale(1.0f);
+            glm::mat4 MatrixRotation(1.0f);
+            glm::mat4 MatrixTranslation(1.0f);
+
+            if (TinyNode.scale.size() > 0) // no identity matrix
+            {
+                assert(TinyNode.scale.size() == 3);
+                MatrixScale = glm::scale(glm::mat4(1.0f),
+                                         glm::vec3((f32)TinyNode.scale[0],
+                                                   (f32)TinyNode.scale[1],
+                                                   (f32)TinyNode.scale[2]));
+            }
+
+            if (TinyNode.rotation.size() > 0) // no identity matrix
+            {
+                assert(TinyNode.rotation.size() == 4);
+                MatrixRotation = glm::mat4_cast(
+                    glm::quat((f32)TinyNode.rotation[3],
+                              (f32)TinyNode.rotation[0],
+                              (f32)TinyNode.rotation[1],
+                              (f32)TinyNode.rotation[2]));
+            }
+
+            if (TinyNode.translation.size() > 0) // no identity matrix
+            {
+                assert(TinyNode.translation.size() == 3);
+                MatrixTranslation = glm::translate(glm::mat4(1.0f),
+                                                   glm::vec3((f32)TinyNode.translation[0],
+                                                             (f32)TinyNode.translation[1],
+                                                             (f32)TinyNode.translation[2]));
+            }
+
+            Matrix = MatrixTranslation * MatrixRotation * MatrixScale;
+        }
+
+        s32 MeshIndex = TinyNode.mesh;
+        tinygltf::Mesh TinyMesh = TinyModel.meshes.at(MeshIndex);
+
+        mesh *Mesh = &Result->Meshes[AssetIndex++];
+
+        temporary_memory_block<u32> Indices = {};
+        temporary_memory_block<f32> Positions = {};
+        temporary_memory_block<f32> Normals = {};
+        temporary_memory_block<f32> Tangents = {};
+        temporary_memory_block<f32> UVs = {};
+        temporary_memory_block<f32> UVs2 = {};
+
+        for (size_t PrimitiveIndex = 0; 
+             PrimitiveIndex < TinyMesh.primitives.size(); 
+             ++PrimitiveIndex)
+        {
+            tinygltf::Primitive& TinyPrimitive = TinyMesh.primitives[PrimitiveIndex];
+            const auto PositionIt = TinyPrimitive.attributes.find("POSITION");
+            const auto NormalIt = TinyPrimitive.attributes.find("NORMAL");
+            const auto TangentIt = TinyPrimitive.attributes.find("TANGENT");
+            const auto Texcoord0It = TinyPrimitive.attributes.find("TEXCOORD_0");
+            const auto Texcoord1It = TinyPrimitive.attributes.find("TEXCOORD_1");
+
+            const bool HasPosition = PositionIt != TinyPrimitive.attributes.end();
+            const bool HasNormal = NormalIt != TinyPrimitive.attributes.end();
+            const bool HasTangent = TangentIt != TinyPrimitive.attributes.end();
+            const bool HasTexcoord0 = Texcoord0It != TinyPrimitive.attributes.end();
+            const bool HasTexcoord1 = Texcoord1It != TinyPrimitive.attributes.end();
+
+            if (TinyPrimitive.indices > 0 &&
+                HasPosition &&
+                HasNormal)
+            {
+                s32 Idx = -1;
+
+                // Indices
+                Idx = TinyPrimitive.indices;
+                Assert(Idx >= 0);
+
+                tinygltf::Accessor Accessor = TinyModel.accessors[Idx];
+                tinygltf::BufferView BufferView = TinyModel.bufferViews[Accessor.bufferView];
+                tinygltf::Buffer Buffer = TinyModel.buffers[BufferView.buffer];
+                
+                EnlargeTemporaryMemory(&Indices, Accessor.count, Win32EnlargeMemory);
+
+                s32 ComponentSize = glTFGetComponentSize(Accessor.componentType);
+                s32 StartIndex = BufferView.byteOffset + Accessor.byteOffset;
+                for (size_t BufferIndex = StartIndex;
+                     BufferIndex < StartIndex + Accessor.count * ComponentSize;
+                     BufferIndex += ComponentSize)
+                {
+                    u32 Index = glTFGetBufferValue<u32>(Accessor.componentType, 
+                                                        &Buffer, 
+                                                        &BufferView, 
+                                                        BufferIndex);
+                    u32 *pIndices = Indices.Memory.PushStruct<u32>();
+                    *pIndices = Index;
+                }
+
+                // Position
+                Idx = PositionIt->second;
+                Assert(Idx >= 0);
+
+                Accessor = TinyModel.accessors[Idx];
+                BufferView = TinyModel.bufferViews[Accessor.bufferView];
+                Buffer = TinyModel.buffers[BufferView.buffer];
+
+                EnlargeTemporaryMemory(&Positions, Accessor.count, Win32EnlargeMemory);
+
+                ComponentSize = glTFGetComponentSize(Accessor.componentType);
+                StartIndex = BufferView.byteOffset + Accessor.byteOffset;
+                for (size_t BufferIndex = StartIndex;
+                     BufferIndex < StartIndex + Accessor.count * ComponentSize;
+                     BufferIndex += ComponentSize)
+                {
+                    f32 Position = glTFGetBufferValue<f32>(Accessor.componentType, 
+                                                           &Buffer,
+                                                           &BufferView,
+                                                           BufferIndex);
+                    f32 *pPosition = Positions.Memory.PushStruct<f32>();
+                    *pPosition = Position;
+                }
+
+                // Normals
+                Idx = NormalIt->second;
+                Assert(Idx >= 0);
+                
+                Accessor = TinyModel.accessors[Idx];
+                BufferView = TinyModel.bufferViews[Accessor.bufferView];
+                Buffer = TinyModel.buffers[BufferView.buffer];
+
+                EnlargeTemporaryMemory(&Normals, Accessor.count, Win32EnlargeMemory);
+
+                ComponentSize = glTFGetComponentSize(Accessor.componentType);
+                StartIndex = BufferView.byteOffset + Accessor.byteOffset;
+                for (size_t BufferIndex = StartIndex;
+                     BufferIndex < StartIndex + Accessor.count * ComponentSize;
+                     BufferIndex += ComponentSize)
+                {
+                    f32 Normal = glTFGetBufferValue<f32>(Accessor.componentType,
+                                                         &Buffer,
+                                                         &BufferView,
+                                                         BufferIndex);
+                    f32 *pNormal = Normals.Memory.PushStruct<f32>();
+                    *pNormal = Normal;
+                }
+
+                size_t VertexCount = TinyModel.accessors[PositionIt->second].count;               
+                if (HasTangent)
+                {
+                    EnlargeTemporaryMemory(&Tangents, VertexCount * 4, Win32EnlargeMemory);
+
+                    Idx = TangentIt->second;
+                    Assert(Idx >= 0);
+
+                    Accessor = TinyModel.accessors[Idx];
+                    BufferView = TinyModel.bufferViews[Accessor.bufferView];
+                    Buffer = TinyModel.buffers[BufferView.buffer];
+
+                    ComponentSize = glTFGetComponentSize(Accessor.componentType);
+                    StartIndex = BufferView.byteOffset + Accessor.byteOffset;
+                    for (size_t BufferIndex = StartIndex;
+                         BufferIndex < StartIndex + Accessor.count * ComponentSize;
+                         BufferIndex += ComponentSize)
+                    {
+                        f32 Tangent = glTFGetBufferValue<f32>(Accessor.componentType,
+                                                              &Buffer,
+                                                              &BufferView,
+                                                              BufferIndex);
+                        f32 *pTangent = Tangents.Memory.PushStruct<f32>();
+                        *pTangent = Tangent;
+                    }
+                }
+
+                if (HasTexcoord0)
+                {
+                    EnlargeTemporaryMemory(&UVs, VertexCount * 2, Win32EnlargeMemory);
+
+                    Idx = Texcoord0It->second;
+                    Assert(Idx >= 0);
+                    
+                    Accessor = TinyModel.accessors[Idx];
+                    BufferView = TinyModel.bufferViews[Accessor.bufferView];
+                    Buffer = TinyModel.buffers[BufferView.buffer];
+
+                    ComponentSize = glTFGetComponentSize(Accessor.componentType);
+                    StartIndex = BufferView.byteOffset + Accessor.byteOffset;
+                    for (size_t BufferIndex = StartIndex;
+                         BufferIndex < StartIndex + Accessor.count * ComponentSize;
+                         BufferIndex += ComponentSize)
+                    {
+                        f32 Texcoord0 = glTFGetBufferValue<f32>(Accessor.componentType,
+                                                                &Buffer,
+                                                                &BufferView,
+                                                                BufferIndex);
+                        f32 *pTexcoord0 = UVs.Memory.PushStruct<f32>();
+                        *pTexcoord0 = Texcoord0;
+                    }
+                }
+
+                if (HasTexcoord1)
+                {
+                    EnlargeTemporaryMemory(&UVs2, VertexCount * 2, Win32EnlargeMemory);
+
+                    Idx = Texcoord1It->second;
+                    Assert(Idx >= 0);
+
+                    Accessor = TinyModel.accessors[Idx];
+                    BufferView = TinyModel.bufferViews[Accessor.bufferView];
+                    Buffer = TinyModel.buffers[BufferView.buffer];
+
+                    ComponentSize = glTFGetComponentSize(Accessor.componentType);
+                    StartIndex = BufferView.byteOffset + Accessor.byteOffset;
+                    for (size_t BufferIndex = StartIndex;
+                         BufferIndex < StartIndex + Accessor.count * ComponentSize;
+                         BufferIndex += ComponentSize)
+                    {
+                        f32 Texcoord1 = glTFGetBufferValue<f32>(Accessor.componentType,
+                                                                &Buffer,
+                                                                &BufferView,
+                                                                BufferIndex);
+                        f32 *pTexcoord1 = UVs2.Memory.PushStruct<f32>();
+                        *pTexcoord1 = Texcoord1;
+                    }
+                }
+
+                Mesh->VertextCount = VertexCount;
+                Mesh->VerticesSize = sizeof(u32) * VertexCount;
+                Mesh->Vertices = Memory->PushArray<vertex>(VertexCount);
+                Result->Size += sizeof(vertex) * VertexCount;
+
+                for (size_t VertexIndex = 0; VertexIndex < VertexCount; ++VertexIndex)
+                {
+                    u64 FourElementsProp[4] =
+                    {
+                        4 * VertexIndex,
+                        4 * VertexIndex + 1,
+                        4 * VertexIndex + 2,
+                        4 * VertexIndex + 3
+                    };
+
+                    u64 ThreeElementsProp[3] =
+                    {
+                        3 * VertexIndex,
+                        3 * VertexIndex + 1,
+                        3 * VertexIndex + 2
+                    };
+
+                    u64 TwoElementsProp[2] =
+                    {
+                        2 * VertexIndex,
+                        2 * VertexIndex + 1
+                    };
+
+                    vertex *Vertex = &Mesh->Vertices[VertexIndex];
+                    if (HasPosition)
+                    {
+                        Vertex->Pos = glm::vec3(Positions.Data[ThreeElementsProp[0]],
+                                                Positions.Data[ThreeElementsProp[1]],
+                                                Positions.Data[ThreeElementsProp[2]]);
+                    }
+                    if (HasNormal)
+                    {
+                        Vertex->Normal = glm::vec3(Normals.Data[ThreeElementsProp[0]],
+                                                   Normals.Data[ThreeElementsProp[1]],
+                                                   Normals.Data[ThreeElementsProp[2]]);
+                    }
+                    if (HasTangent)
+                    {
+                        Vertex->TangentSpace = glm::vec4(Tangents.Data[FourElementsProp[0]],
+                                                         Tangents.Data[FourElementsProp[1]],
+                                                         Tangents.Data[FourElementsProp[2]],
+                                                         Tangents.Data[FourElementsProp[3]]);
+                    }
+                    if (HasTexcoord0)
+                    {
+                        Vertex->TexCoord0 = glm::vec2(UVs.Data[TwoElementsProp[0]],
+                                                      UVs.Data[TwoElementsProp[1]]);
+                    }
+                    if (HasTexcoord1)
+                    {
+                        Vertex->TexCoord1 = glm::vec2(UVs2.Data[TwoElementsProp[0]],
+                                                      UVs2.Data[TwoElementsProp[1]]);
+                    }
+
+                    ApplyTransform(Vertex, &Matrix);
+                    
+                }
+
+            }
+
+            EndTemporaryMemory(&Indices, Win32DeallocateMemory);
+            EndTemporaryMemory(&Positions, Win32DeallocateMemory);
+            EndTemporaryMemory(&Normals, Win32DeallocateMemory);
+            EndTemporaryMemory(&Tangents, Win32DeallocateMemory);
+            EndTemporaryMemory(&UVs, Win32DeallocateMemory);
+            EndTemporaryMemory(&UVs2, Win32DeallocateMemory);
+        }
+    }
+
+    int END = 5;
+
+    return Result;
+}
+
+internal PLATFORM_UNLOAD_ASSET(Win32UnloadAsset)
+{
+}
 
 /// WinMain
 
@@ -1030,12 +1561,15 @@ WinMain(HINSTANCE Instance,
     WindowClass.hCursor = LoadCursor(0, IDC_ARROW);
     WindowClass.lpszClassName = "WarpunkWindowClass";
     
-    platform_api Platform = {};
-    Platform.AddWorkQueueEntry = Win32AddWorkQueueEntry;
-    Platform.CompleteAllWork = Win32CompleteAllWork;
+    platform_api PlatformAPI = {};
+    PlatformAPI.AddWorkQueueEntry = Win32AddWorkQueueEntry;
+    PlatformAPI.CompleteAllWork = Win32CompleteAllWork;
+    PlatformAPI.AllocateMemory = Win32AllocateMemory;
+    PlatformAPI.DeallocateMemory = Win32DeallocateMemory;
+    PlatformAPI.EnlargeMemory = Win32EnlargeMemory;
 
-    v2s RenderDim = { 1424, 728 };
-    Win32ResizeDIBSection(&GlobalBackbuffer, RenderDim.Width, RenderDim.Height);
+    glm::vec2 RenderDim = { 1424, 728 };
+    Win32ResizeDIBSection(&GlobalBackbuffer, RenderDim.x, RenderDim.y);
     
     work_thread HighPriorityThreads[12] = {};
     work_queue HighPriorityQueue = {};
@@ -1077,7 +1611,7 @@ WinMain(HINSTANCE Instance,
             GameMemory.Used = 0;
             GameMemory.Data = VirtualAlloc(0, GB(2), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 
-            Win32InitializeVulkan(RendererDC, Window, Instance, &RendererMemory);
+            Win32InitializeVulkan(RendererDC, Window, Instance, &RendererMemory, &PlatformAPI);
             Win32InitializeXAudio2();
 
             int MonitorRefreshHz = 60;
@@ -1092,11 +1626,11 @@ WinMain(HINSTANCE Instance,
             GameContext.Memory = &GameMemory;
             GameContext.HighPriorityQueue = &HighPriorityQueue;
             GameContext.LowPriorityQueue = &LowPriorityQueue;
-            GameContext.PlatformAPI = &Platform;
+            GameContext.PlatformAPI = &PlatformAPI;
 
             game_input GameInput = {};
-            GameInput.RenderWidth = RenderDim.Width;
-            GameInput.RenderHeight = RenderDim.Height;
+            GameInput.RenderWidth = RenderDim.x;
+            GameInput.RenderHeight = RenderDim.y;
             
             game_debug_info GameDebugInfo = {};
             GameDebugInfo.Keyboard = &GameInput.Keyboard; 

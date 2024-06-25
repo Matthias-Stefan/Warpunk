@@ -1,9 +1,3 @@
-/* ========================================================================
-   $File: warpunk_renderer.h $
-   $Date: 21.10.2023 $
-   $Creator: Matthias Stefan $
-   ======================================================================== */
-
 #ifndef WARPUNK_RENDERER_H
 #define WARPUNK_RENDERER_H
 
@@ -11,18 +5,10 @@
 
 #define UNSUCCESSFUL(Result) (Result != VK_SUCCESS) 
 
-#include "source/core/memory.h"
 #include "source/core/types.h"
-#include "source/core/vec.h"
+#include "source/platform/asset.h"
+#include "source/platform/platform.h"
 
-
-struct vertex
-{
-    v4f Pos;
-    v4f Color;
-    v2f TexCoord;
-    v4f Normal;
-};
 
 inline VkVertexInputBindingDescription
 GetVertexInputBindingDescription()
@@ -53,7 +39,7 @@ GetVertexInputAttributeDescription(u32 *AttributeDescriptionCount)
     VertexInputAttributeDescription[2].binding = 0;
     VertexInputAttributeDescription[2].location = 2;
     VertexInputAttributeDescription[2].format = VK_FORMAT_R32G32_SFLOAT;
-    VertexInputAttributeDescription[2].offset = offsetof(vertex, TexCoord);
+    VertexInputAttributeDescription[2].offset = offsetof(vertex, TexCoord0);
     
     *AttributeDescriptionCount= ArraySize(VertexInputAttributeDescription);
     return VertexInputAttributeDescription;
@@ -79,6 +65,7 @@ struct vulkan_queue
 struct vulkan_context
 {
     memory_block *GraphicsMemoryBlock;
+    platform_api *PlatformAPI;
     
     VkInstance Instance;
     VkSurfaceKHR Surface;
@@ -153,7 +140,7 @@ struct uniform_buffer_object
 
 struct camera;
 #define RENDERER_DRAW_FRAME(name) void name(vulkan_context *Renderer, \
-v2s RenderDim, \
+glm::vec2 RenderDim, \
 f32 DtFrame, \
 camera *Camera, \
 game_debug_info *GameDebugInfo)

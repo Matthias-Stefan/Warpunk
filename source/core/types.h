@@ -44,9 +44,3 @@ inline u32 GetThreadID(void)
 
     return(ThreadID);
 }
-
-struct m4x4
-{
-    // These are stored ROW MAJOR - E[ROW][COLUMN]
-    f32 E[4][4]; 
-};

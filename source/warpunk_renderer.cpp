@@ -1,13 +1,14 @@
-/* ========================================================================
-   $File: warpunk_renderer.cpp $
-   $Date: 21.10.2023 $
-   $Creator: Matthias Stefan $
-   ======================================================================== */
+/* TODO
+ * Rewrite Renderlayer! 
+ * 
+ */
 
 #include "warpunk_camera.h"
 #include "warpunk_renderer.h"
 
-#include "source/core/memory.h"
+#include "source/platform/platform.h"
+
+#include <vector>
 
 internal void
 CreateInstance(vulkan_context *VulkanContext)
@@ -26,16 +27,19 @@ CreateInstance(vulkan_context *VulkanContext)
     
     u32 InstanceLayerPropertyCount;
     vkEnumerateInstanceLayerProperties(&InstanceLayerPropertyCount, 0);
-    temporary_memory_block<VkLayerProperties> InstanceLayerProperties(InstanceLayerPropertyCount);
+    temporary_memory_block<VkLayerProperties> InstanceLayerProperties;
+    StartTemporaryMemory(&InstanceLayerProperties, InstanceLayerPropertyCount, VulkanContext->PlatformAPI->AllocateMemory);
     vkEnumerateInstanceLayerProperties(&InstanceLayerPropertyCount, InstanceLayerProperties.Data);
     
     u32 ExtensionPropertyCount;
     vkEnumerateInstanceExtensionProperties(0, &ExtensionPropertyCount, 0);
-    temporary_memory_block<VkExtensionProperties> ExtensionProperties(ExtensionPropertyCount);
-    vkEnumerateInstanceExtensionProperties(0, &ExtensionPropertyCount, ExtensionProperties.Data);
+    temporary_memory_block<VkExtensionProperties> ExtensionProperties;
+    StartTemporaryMemory(&ExtensionProperties, ExtensionPropertyCount, VulkanContext->PlatformAPI->AllocateMemory);
+    vkEnumerateInstanceExtensionProperties(0, &ExtensionPropertyCount, (VkExtensionProperties *)ExtensionProperties.Data);
     
-    temporary_memory_block<const char*> ExtensionPropertyNames(ExtensionPropertyCount);
-    
+    temporary_memory_block<const char *> ExtensionPropertyNames;
+    StartTemporaryMemory(&ExtensionPropertyNames, ExtensionPropertyCount, VulkanContext->PlatformAPI->AllocateMemory);
+
     for (u32 ExtensionIndex = 0; 
          ExtensionIndex < ExtensionPropertyCount; 
          ++ExtensionIndex)
@@ -55,6 +59,10 @@ CreateInstance(vulkan_context *VulkanContext)
     InstanceCreateInfo.ppEnabledExtensionNames = ExtensionPropertyNames.Data;
     
     VkResult CreateInstanceResult = vkCreateInstance(&InstanceCreateInfo, 0, &VulkanContext->Instance); 
+
+    EndTemporaryMemory(&InstanceLayerProperties, VulkanContext->PlatformAPI->DeallocateMemory);
+    EndTemporaryMemory(&ExtensionProperties, VulkanContext->PlatformAPI->DeallocateMemory);
+    EndTemporaryMemory(&ExtensionPropertyNames, VulkanContext->PlatformAPI->DeallocateMemory);
     if (UNSUCCESSFUL(CreateInstanceResult))
     {
         Win32ErrorMessage(PlatformError_Fatal, "Failed to create VkInstance.");
@@ -93,7 +101,8 @@ SelectPhysicalDevice(vulkan_context *VulkanContext)
         Win32ErrorMessage(PlatformError_Fatal, "Failed to select a VkPhysicalDevice.");
     }
     
-    temporary_memory_block<VkPhysicalDevice> PhysicalDevices(DeviceCount);
+    temporary_memory_block<VkPhysicalDevice> PhysicalDevices;
+    StartTemporaryMemory(&PhysicalDevices, DeviceCount, VulkanContext->PlatformAPI->AllocateMemory);
     vkEnumeratePhysicalDevices(VulkanContext->Instance, &DeviceCount, PhysicalDevices.Data);
     for (int DeviceIndex = 0; 
          DeviceIndex < DeviceCount; 
@@ -127,6 +136,7 @@ SelectPhysicalDevice(vulkan_context *VulkanContext)
         }
     }
     
+    EndTemporaryMemory(&PhysicalDevices, VulkanContext->PlatformAPI->DeallocateMemory);
     if (VulkanContext->PhysicalDevice == VK_NULL_HANDLE)
     {
         Win32ErrorMessage(PlatformError_Fatal, "Failed to create VkPhysicalDevice.");
@@ -140,7 +150,8 @@ FindQueueFamilies(vulkan_context *VulkanContext)
     vkGetPhysicalDeviceQueueFamilyProperties(VulkanContext->PhysicalDevice, 
                                              &QueueFamiliesCount, 
                                              0);
-    temporary_memory_block<VkQueueFamilyProperties> QueueFamilyProperties(QueueFamiliesCount);
+    temporary_memory_block<VkQueueFamilyProperties> QueueFamilyProperties;
+    StartTemporaryMemory(&QueueFamilyProperties, QueueFamiliesCount, VulkanContext->PlatformAPI->AllocateMemory);
     vkGetPhysicalDeviceQueueFamilyProperties(VulkanContext->PhysicalDevice, 
                                              &QueueFamiliesCount, 
                                              QueueFamilyProperties.Data);
@@ -158,6 +169,8 @@ FindQueueFamilies(vulkan_context *VulkanContext)
             }
         }
     }
+
+    EndTemporaryMemory(&QueueFamilyProperties, VulkanContext->PlatformAPI->DeallocateMemory);
 }
 
 internal void
@@ -168,8 +181,9 @@ CreateLogicalDevice(vulkan_context *VulkanContext,
     FindQueueFamilies(VulkanContext);
     u32 QueueCount = VulkanContext->QueueCount;
     
-    temporary_memory_block<VkDeviceQueueCreateInfo> DeviceQueueCreateInfos(QueueCount);
-    
+    temporary_memory_block<VkDeviceQueueCreateInfo> DeviceQueueCreateInfos;
+    StartTemporaryMemory(&DeviceQueueCreateInfos, QueueCount, VulkanContext->PlatformAPI->AllocateMemory);
+
     f32 Priorities[] = { 1.0f };
     for (u32 DeviceQueueCreateInfosIndex = 0;
          DeviceQueueCreateInfosIndex < QueueCount;
@@ -200,6 +214,7 @@ CreateLogicalDevice(vulkan_context *VulkanContext,
                                                  0,
                                                  &VulkanContext->Device);
     
+    EndTemporaryMemory(&DeviceQueueCreateInfos, VulkanContext->PlatformAPI->DeallocateMemory);
     if (UNSUCCESSFUL(CreateDeviceResult))
     {
         Win32ErrorMessage(PlatformError_Fatal, "Failed to create VkDevice.");
@@ -627,37 +642,38 @@ DEBUGGetVertices(vulkan_context *VulkanContext)
     VulkanContext->VerticesSize = sizeof(vertex) * VertexCount;
     VulkanContext->VertexCount = VertexCount;
     
+
     VulkanContext->Vertices[0].Pos = { -0.5f, -0.5f, 0.0f };
-    VulkanContext->Vertices[0].Color = { 1.0f, 0.0f, 0.0f };
-    VulkanContext->Vertices[0].TexCoord = { 1.0f, 0.0f };
+    VulkanContext->Vertices[0].Color = { 1.0f, 0.0f, 0.0f, 1.0f };
+    VulkanContext->Vertices[0].TexCoord0 = { 1.0f, 0.0f };
     
     VulkanContext->Vertices[1].Pos = { 0.5f, -0.5f, 0.0f };
-    VulkanContext->Vertices[1].Color = { 0.0f, 1.0f, 0.0f };
-    VulkanContext->Vertices[1].TexCoord = { 0.0f, 0.0f };
+    VulkanContext->Vertices[1].Color = { 0.0f, 1.0f, 0.0f, 1.0f };
+    VulkanContext->Vertices[1].TexCoord0 = { 0.0f, 0.0f };
     
     VulkanContext->Vertices[2].Pos = { 0.5f, 0.5f, 0.0f };
-    VulkanContext->Vertices[2].Color = { 0.0f, 0.0f, 1.0f };
-    VulkanContext->Vertices[2].TexCoord = { 0.0f, 1.0f };
+    VulkanContext->Vertices[2].Color = { 0.0f, 0.0f, 1.0f, 1.0f };
+    VulkanContext->Vertices[2].TexCoord0 = { 0.0f, 1.0f };
     
     VulkanContext->Vertices[3].Pos = { -0.5f, 0.5f, 0.0f };
-    VulkanContext->Vertices[3].Color = { 0.0f, 1.0f, 1.0f };
-    VulkanContext->Vertices[3].TexCoord = { 1.0f, 1.0f };
+    VulkanContext->Vertices[3].Color = { 0.0f, 1.0f, 1.0f, 1.0f };
+    VulkanContext->Vertices[3].TexCoord0 = { 1.0f, 1.0f };
     
     VulkanContext->Vertices[4].Pos = { -0.5f, -0.5f, -0.5f };
-    VulkanContext->Vertices[4].Color = { 1.0f, 0.0f, 0.0f };
-    VulkanContext->Vertices[4].TexCoord = { 0.0f, 0.0f };
+    VulkanContext->Vertices[4].Color = { 1.0f, 0.0f, 0.0f, 1.0f };
+    VulkanContext->Vertices[4].TexCoord0 = { 0.0f, 0.0f };
     
     VulkanContext->Vertices[5].Pos = { 0.5f, -0.5f, -0.5f };
-    VulkanContext->Vertices[5].Color = { 0.0f, 1.0f, 0.0f };
-    VulkanContext->Vertices[5].TexCoord = { 1.0f, 0.0f };
+    VulkanContext->Vertices[5].Color = { 0.0f, 1.0f, 0.0f, 1.0f };
+    VulkanContext->Vertices[5].TexCoord0 = { 1.0f, 0.0f };
     
     VulkanContext->Vertices[6].Pos = { 0.5f, 0.5f, -0.5f };
-    VulkanContext->Vertices[6].Color = { 0.0f, 0.0f, 1.0f };
-    VulkanContext->Vertices[6].TexCoord = { 1.0f, 1.0f };
+    VulkanContext->Vertices[6].Color = { 0.0f, 0.0f, 1.0f, 1.0f };
+    VulkanContext->Vertices[6].TexCoord0 = { 1.0f, 1.0f };
     
     VulkanContext->Vertices[7].Pos = { -0.5f, 0.5f, -0.5f };
-    VulkanContext->Vertices[7].Color = { 1.0f, 1.0f, 1.0f };
-    VulkanContext->Vertices[7].TexCoord = { 0.0f, 1.0f };
+    VulkanContext->Vertices[7].Color = { 1.0f, 1.0f, 1.0f, 1.0f };
+    VulkanContext->Vertices[7].TexCoord0 = { 0.0f, 1.0f };
     
     u32 IndexCount = 12;
     
@@ -1449,9 +1465,11 @@ UpdateUniformBuffer(vulkan_context *VulkanContext,
                                             glm::radians(10.0f),
                                             glm::vec3(0.0f, 1.0f, 0.0f));
     
-    UniformBufferObject.View = glm::lookAt(glm::vec3(Camera->Pos.x, Camera->Pos.y, Camera->Pos.z), 
-                                           glm::vec3(Camera->Target.x, Camera->Target.y, Camera->Target.z), 
-                                           glm::vec3(Camera->Up.x, Camera->Up.y, Camera->Up.z));
+    UniformBufferObject.View = glm::lookAt(Camera->Pos,
+                                           Camera->Pos + Camera->Dir, 
+                                           Camera->Up);
+
+
     f32 AspectRatio = VulkanContext->SwapChainExtent.width / (f32)VulkanContext->SwapChainExtent.height;
     UniformBufferObject.Projection = glm::perspective(ToRadian(45.0f), AspectRatio, 0.1f, 100.0f);
     UniformBufferObject.Projection[1][1] *= -1;
@@ -1855,12 +1873,12 @@ LoadModel(vulkan_context *VulkanContext, char *ModelPath)
                 Attrib.vertices[3 * Index.vertex_index + 2]
             };
             
-            Vertex.TexCoord = {
+            Vertex.TexCoord0 = {
                 Attrib.texcoords[2 * Index.texcoord_index + 0],
                 1.0f - Attrib.texcoords[2 * Index.texcoord_index + 1]
             };
             
-            Vertex.Color = { 1.0f, 1.0f, 1.0f };
+            Vertex.Color = { 1.0f, 1.0f, 1.0f, 1.0f };
             
             Vertices.push_back(Vertex);
             Indices.push_back(VertexIndex++);
@@ -2051,10 +2069,10 @@ DrawDebugInfo(game_debug_info *GameDebugInfo)
                     GameDebugInfo->Camera->Pos.x, 
                     GameDebugInfo->Camera->Pos.y,
                     GameDebugInfo->Camera->Pos.z);
-        ImGui::Text("Target: (%g, %g, %g)", 
-                    GameDebugInfo->Camera->Target.x, 
-                    GameDebugInfo->Camera->Target.y,
-                    GameDebugInfo->Camera->Target.z);
+        ImGui::Text("Dir: (%g, %g, %g)", 
+                    GameDebugInfo->Camera->Dir.x, 
+                    GameDebugInfo->Camera->Dir.y,
+                    GameDebugInfo->Camera->Dir.z);
         ImGui::Text("Up: (%g, %g, %g)", 
                     GameDebugInfo->Camera->Up.x, 
                     GameDebugInfo->Camera->Up.y,

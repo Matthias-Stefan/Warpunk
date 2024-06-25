@@ -3,6 +3,7 @@
 #include "source/core/types.h"
 
 struct work_queue;
+
 #define WORK_QUEUE_CALLBACK(name) void name(work_queue *Queue, void *Data)
 typedef WORK_QUEUE_CALLBACK(work_queue_callback);
 

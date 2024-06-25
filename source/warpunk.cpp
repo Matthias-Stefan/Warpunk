@@ -1,21 +1,11 @@
 #include "warpunk.h"
 
-#include "source/core/matrix.h"
-#include "source/core/memory.h"
 #include "source/core/queue.h"
-#include "source/core/vec.h"
 #include "source/platform/keyboard.h"
 #include "source/platform/mouse.h"
 #include "source/platform/platform.h"
 
 #include "warpunk_world.cpp"
-
-internal void AddConstruction(world *World, aabb Construction)
-{
-    //Assert(World->Constructions);
-    World->Constructions[World->ConstructionCount] = Construction;
-    World->ConstructionCount++;
-}
 
 extern "C" GAME_INITIALIZE(GameInitialize)
 {
@@ -48,262 +38,12 @@ extern "C" GAME_INITIALIZE(GameInitialize)
     //
     
     InitializeCamera(&GameState->Camera);
-    
-    s32 Width = Input->RenderWidth / 2;
-    s32 Height = Input->RenderHeight / 2;
-    GameState->Camera.Projection = GetOrthographicProjectionMatrix(-Width, Width,
-                                                                   -Height, Height,
-                                                                   0.1f, 100.0f);
-    u32 ConstructionSize = 256;
-    GameState->World.ConstructionSize = ConstructionSize;
-    GameState->World.Constructions =  Memory->PushArray<aabb>(ConstructionSize); 
-    
-    AddConstruction(&GameState->World, { v2<f32>{ 0.0f, 0.0f }, v2<f32>{ 100.0f, 100.0f} });
-    AddConstruction(&GameState->World, { v2<f32>{ 150.0f, 150.0f }, v2<f32>{ 250.0f, 250.0f} });
-    AddConstruction(&GameState->World, { v2<f32>{ -250.0f, -250.0f }, v2<f32>{ -150.0f, -150.0f} });
-    
-#if false
-    DebugInfo->Mouse = &Input->Mouse;
-    DebugInfo->Keyboard = &Input->Keyboard;
-    DebugInfo->Camera = &GameState->Camera;
-#endif
-}
-
-internal bool 
-FindRecordInQueue(static_queue<node_record, 256> *Queue, 
-                  node *Node, 
-                  node_record *Record, 
-                  u32 *Index)
-{
-    for (u32 QueueIndex = Queue->Head; 
-         QueueIndex != Queue->Tail; 
-         QueueIndex = (QueueIndex + 1) & Queue->Size)
-    {
-        node_record *CurrentRecord = &Queue->E[QueueIndex];
-        if (Node->ID == CurrentRecord->Node->ID)
-        {
-            *Record = *CurrentRecord;
-            *Index = QueueIndex;
-            return true;
-        } 
-    }
-    return false;
-}
-
-#include <intrin.h>
-internal void
-PathfindAStar(entity *Entity, v2<f32> *Destination, game_state *GameState)
-{
-#if false
-    wc::memory_block *Memory = GameState->Memory;
-    v2<f32> EntityPos = { Entity->Pos.x, Entity->Pos.y };
-    
-    //
-    //  Init Node-Graph
-    //
-    
-    u32 NodeCount = 2; 
-    for (u32 ConstructionIndex = 0;
-         ConstructionIndex < GameState->World.ConstructionCount;
-         ++ConstructionIndex)
-    {
-        if (SegmentIntersectsAABB(EntityPos, *Destination, &GameState->World.Constructions[ConstructionIndex]))
-        {
-            NodeCount += 4;
-        }
-    }
-    
-    if (NodeCount > 2)
-    {
-        node *Graph = (node *)PushSizeTemporary(Memory, sizeof(node) * NodeCount);
-        u32 GraphSize = 0;
-        Graph[GraphSize++] = { GraphSize, EntityPos, false, nullptr, 0, nullptr };
-        for (u32 ConstructionIndex = 0;
-             ConstructionIndex < GameState->World.ConstructionCount;
-             ++ConstructionIndex)
-        {
-            if (SegmentIntersectsAABB(EntityPos, *Destination, &GameState->World.Constructions[ConstructionIndex]))
-            {
-                aabb ConstructionExtruded = GetExtrudedBox(&GameState->World.Constructions[ConstructionIndex], 
-                                                           Entity->Geo.Width + 20);
-                Graph[GraphSize++] = { 
-                    GraphSize, ConstructionExtruded.Min, false, nullptr, 0, nullptr };
-                Graph[GraphSize++] = {
-                    GraphSize, { ConstructionExtruded.Max.x, ConstructionExtruded.Min.y }, false, nullptr, 0, nullptr };
-                Graph[GraphSize++] = { 
-                    GraphSize, ConstructionExtruded.Max, false, nullptr, 0, nullptr };
-                Graph[GraphSize++] = {
-                    GraphSize, { ConstructionExtruded.Min.x, ConstructionExtruded.Max.y }, false, nullptr, 0, nullptr };
-            }
-        }
-        Graph[GraphSize++] = { GraphSize, *Destination, true, nullptr, 0, nullptr }; 
-        
-        //
-        // Init Connections
-        //
-        
-        for (u32 FromNodeIndex = 0;
-             FromNodeIndex< GraphSize;
-             ++FromNodeIndex)
-        {
-            node *FromNode = &Graph[FromNodeIndex];
-            FromNode->ConnectionCount = 0;
-            for (u32 ToNodeIndex = 0;
-                 ToNodeIndex < GraphSize;
-                 ++ToNodeIndex)
-            {
-                if (FromNodeIndex == ToNodeIndex)
-                {
-                    continue;
-                }
-                
-                node *ToNode = &Graph[ToNodeIndex];
-                
-                bool IsReachable = true;
-                for (u32 ConstructionIndex = 0;
-                     ConstructionIndex < GameState->World.ConstructionCount;
-                     ++ConstructionIndex)
-                {
-                    if (SegmentIntersectsAABB(FromNode->Pos, ToNode->Pos, 
-                                              &GameState->World.Constructions[ConstructionIndex]))
-                    {
-                        IsReachable = false;
-                        break;
-                    }
-                }
-                if (IsReachable)
-                {
-                    FromNode->ConnectionCount++;
-                }
-            }
-            
-            FromNode->Connection = (connection *)PushSizeTemporary(Memory, sizeof(connection)*FromNode->ConnectionCount);
-            u32 ConnectionIndex = 0;
-            for (u32 ToNodeIndex = 0;
-                 ToNodeIndex < GraphSize;
-                 ++ToNodeIndex)
-            {
-                if (FromNodeIndex == ToNodeIndex)
-                {
-                    continue;
-                }
-                
-                node *ToNode = &Graph[ToNodeIndex];
-                
-                bool IsReachable = true;
-                for (u32 ConstructionIndex = 0;
-                     ConstructionIndex < GameState->World.ConstructionCount;
-                     ++ConstructionIndex)
-                {
-                    if (SegmentIntersectsAABB(FromNode->Pos, ToNode->Pos, 
-                                              &GameState->World.Constructions[ConstructionIndex]))
-                    {
-                        IsReachable = false;
-                        break;
-                    }
-                }
-                if (IsReachable)
-                {
-                    FromNode->Connection[ConnectionIndex++] = { FromNode, ToNode, DistanceSq(FromNode->Pos, ToNode->Pos) };
-                }
-            }
-        }
-        
-        //
-        // A*
-        //
-        
-        queue<node_record> OpenQueue(Memory, 1024, MallocType_Temporary);
-        queue<node_record> ClosedQueue(Memory, 1024, MallocType_Temporary);
-        
-        node *StartNode = &Graph[0];
-        
-        node_record StartRecord = {};
-        StartRecord.Node = StartNode;
-        StartRecord.Connection = nullptr;
-        StartRecord.CostSoFar = 0.0f;
-        StartRecord.EstimatedTotalCost = DistanceSq(StartNode->Pos, Graph[GraphSize-1].Pos);
-        StartRecord.Category = NodeCategory_Open;
-        
-        AddQueueItem(&OpenQueue, StartRecord);
-        
-        node_record *CurrentRecord = nullptr;
-        while (OpenQueue.Fill > 0)
-        {
-            CurrentRecord = GetQueueItemAt(&OpenQueue, 0);
-            if (CurrentRecord->Node->IsTarget)
-            {
-                break;
-            }
-            
-            for (u32 ConnectionIndex = 0;
-                 ConnectionIndex < CurrentRecord->Node->ConnectionCount;
-                 ++ConnectionIndex)
-            {
-                connection *Connection = &CurrentRecord->Node->Connection[ConnectionIndex];
-                node *ToNode = Connection->ToNode;
-                f32 ToNodeCost = CurrentRecord->CostSoFar + Connection->Cost;
-                
-                node_record ToNodeRecord;
-                f32 ToNodeHeuristic;
-                u32 QueueIndex = 0;
-                if (FindRecordInQueue(&ClosedQueue, ToNode, &ToNodeRecord, &QueueIndex))
-                {
-                    if (ToNodeRecord.CostSoFar <= ToNodeCost)
-                    {
-                        continue;
-                    }
-                    
-                    ReleaseQueueItemAt(&ClosedQueue, QueueIndex);
-                    ToNodeHeuristic = ToNodeRecord.EstimatedTotalCost - ToNodeRecord.CostSoFar;
-                }
-                else if (FindRecordInQueue(&OpenQueue, ToNode, &ToNodeRecord, &QueueIndex))
-                {
-                    if (ToNodeRecord.CostSoFar <= ToNodeCost)
-                    {
-                        continue;
-                    }
-                    
-                    ToNodeHeuristic = ToNodeRecord.EstimatedTotalCost - ToNodeRecord.Connection->Cost;
-                }
-                else
-                {
-                    ToNodeRecord.Node = ToNode;
-                    ToNodeRecord.Connection = Connection;
-                    ToNodeHeuristic = DistanceSq(ToNode->Pos, Graph[GraphSize-1].Pos); 
-                }
-                
-                ToNodeRecord.Connection->Cost = ToNodeCost;
-                ToNodeRecord.Connection = Connection;
-                Connection->ToNode->Prev = Connection->FromNode;
-                ToNodeRecord.EstimatedTotalCost = ToNodeCost + ToNodeHeuristic;
-                
-                if (!FindRecordInQueue(&OpenQueue, ToNode, &ToNodeRecord, &QueueIndex))
-                {
-                    AddQueueItem(&OpenQueue, ToNodeRecord);
-                } 
-            } 
-            
-            u32 OpenQueueIndex;
-            FindRecordInQueue(&OpenQueue, CurrentRecord->Node, CurrentRecord, &OpenQueueIndex);
-            ReleaseQueueItemAt(&OpenQueue, OpenQueueIndex);
-            
-            u32 ClosedQueueIndex;
-            AddQueueItem(&ClosedQueue, *CurrentRecord);
-        }
-        
-        if (CurrentRecord->Node->IsTarget)
-        {
-            //AssignRoute(Entity, CurrentRecord->Node);
-        }
-    }
-    else
-    {
-        AddQueueItem(&Entity->QueuedPos, { Destination->x, Destination->y, 0.0f, 1.0f });
-    }
-    
-    FlushTemporary(Memory);
-#endif
+    GameState->Camera.Pos = { 45.1697464f, 25.2711525f, 14.8278751f };
+    GameState->Camera.Dir = { -0.84403336f, -0.427358776f, -0.323994398f };
+    GameState->Camera.Up = { -0.398973674f, 0.904082119f, -0.153151825f };
+    GameState->Camera.Right = { 0.358368307f, 0.0f, -0.933580279f };
+    GameState->Camera.Yaw = -21.0000229f;
+    GameState->Camera.Pitch = 25.3000546f;
 }
 
 extern "C" GAME_UPDATE_AND_RENDER(GameUpdateAndRender)
@@ -311,67 +51,37 @@ extern "C" GAME_UPDATE_AND_RENDER(GameUpdateAndRender)
     memory_block *Memory = GameContext->Memory;
     game_state *GameState = GameContext->GameState;
     platform_api *PlatformAPI = GameContext->PlatformAPI;
-
+    
     world *World = &GameState->World;
     camera *Camera = &GameState->Camera;
     
-    mouse *Mouse = &Input->Mouse; 
-    keyboard *Keyboard = &Input->Keyboard; 
+    mouse *Mouse = &Input->Mouse;
+    keyboard *Keyboard = &Input->Keyboard;
     
-    v2f RenderDim = { 
-        static_cast<f32>(Input->RenderWidth), 
-        static_cast<f32>(Input->RenderWidth) 
-    }; 
+    /// Selection cast
+    temporary_memory_block<entity> Selection;
+    StartTemporaryMemory(&Selection, 32, PlatformAPI->AllocateMemory);
+
+    EndTemporaryMemory(&Selection, PlatformAPI->DeallocateMemory);
+
+    /// Update camera
     
-#if false
-    MouseP = ScreenPosToWorldPos((f32)Input->RenderWidth, (f32)Input->RenderHeight, 
-                                 Input->Mouse.P, Camera->Pos);
-    MouseDownP = ScreenPosToWorldPos(RenderDim.Width, RenderDim.Height, 
-                                     Input->Mouse.DownP, Camera->Pos);
-#endif
-    //
-    // Update Camera
-    //
-    
-    v3f Dir = Normalize(Camera->Target - Camera->Pos);
-    f32 Dist = SquareRoot(MagnitudeSq(Camera->Target - Camera->Pos)); 
     if (Input->Mouse.IsPressed(MouseButton_Left))
     {
         // Tumble
-        const v4f Up = { 0.0f, 1.0f, 0.0f, 0.0f }; 
-        
         if (Input->Mouse.IsMoving)
         {
+            // Update Camera
+            Camera->Yaw += Mouse->DraggingRecentDtx * Camera->Speed;
+            Camera->Pitch += Mouse->DraggingRecentDty * Camera->Speed;
             
-            Camera->Yaw += Mouse->DraggingRecentDtx * Camera->Speed * 0.01f;
-            if (Camera->Yaw > TAU)
-            {
-                Camera->Yaw = Camera->Yaw - TAU; 
-            }
-            else if (Camera->Yaw < 0.0f)
-            {
-                Camera->Yaw = TAU - Camera->Yaw; 
-            }
-            
-            Camera->Pitch += Mouse->DraggingRecentDty * Camera->Speed * 0.01f;
-            if (Camera->Pitch > PI_2)
-            {
-                Camera->Pitch = PI_2; 
-            }
-            else if (Camera->Pitch < -PI_2)
-            {
-                Camera->Pitch = -PI_2; 
-            }
-            mat4x4<f32> RotYaw = YRotate(Camera->Yaw);
-            mat4x4<f32> RotPitch = XRotate(-Camera->Pitch);
-            
-            mat4x4<f32> CombinedRotation = RotYaw * RotPitch;
-            Dir = Normalize((v3<f32>)(CombinedRotation * ((v4f)Camera->Dir)));
-            
-            Camera->Target = Camera->Pos - Dir * Dist;
-            Camera->Up = Normalize((v3f)(CombinedRotation * Up));
-            
-            Camera->Right = Normalize(Cross(Dir, Camera->Up));
+            glm::vec3 Dir;
+            Dir.x = -cos(glm::radians(Camera->Yaw)) * cos(glm::radians(Camera->Pitch));
+            Dir.y = -sin(glm::radians(Camera->Pitch));
+            Dir.z = sin(glm::radians(Camera->Yaw)) * cos(glm::radians(Camera->Pitch));
+            Camera->Dir = glm::normalize(Dir);
+            Camera->Right = glm::normalize(glm::cross(Dir, glm::vec3(0.0f, 1.0f, 0.0f)));
+            Camera->Up = glm::normalize(glm::cross(Camera->Right, Camera->Dir));
         }
     }
     else if (Input->Mouse.IsPressed(MouseButton_Middle))
@@ -382,13 +92,11 @@ extern "C" GAME_UPDATE_AND_RENDER(GameUpdateAndRender)
             f32 MouseXSpeed = Mouse->DraggingRecentDtx * Camera->Speed;
             f32 MouseYSpeed = Mouse->DraggingRecentDty * Camera->Speed;
             
-            v3<f32> MoveVectorHorizontal = Camera->Right * MouseXSpeed;
-            v3<f32> MoveVectorVertical = Camera->Up * MouseYSpeed;
+            glm::vec3 MoveVectorHorizontal = -Camera->Right * MouseXSpeed;
+            glm::vec3 MoveVectorVertical = Camera->Up * MouseYSpeed;
             
             Camera->Pos += MoveVectorHorizontal;
             Camera->Pos -= MoveVectorVertical;
-            Camera->Target += MoveVectorHorizontal;
-            Camera->Target -= MoveVectorVertical;
         }
     }
     else if (Input->Mouse.IsPressed(MouseButton_Right))
@@ -396,7 +104,7 @@ extern "C" GAME_UPDATE_AND_RENDER(GameUpdateAndRender)
         // Dolly
         if (Input->Mouse.IsMoving)
         {
-            Camera->Pos = Camera->Pos + Dir * (Mouse->DraggingRecentDtx * Camera->Speed);
+            Camera->Pos = Camera->Pos + Camera->Dir * (Mouse->DraggingRecentDtx * Camera->Speed);
         }
     }
     
