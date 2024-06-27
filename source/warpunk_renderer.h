@@ -81,16 +81,28 @@ struct vulkan_context
     u32 QueueCount = 1;
     vulkan_queue GraphicsQueue;
     
-    // Vertex Info 
-    u32 VertexCount;
-    u32 VerticesSize;
-    vertex *Vertices;
+    asset_arena AssetArena;
+
+
+    VkBuffer ViewProjectionBuffer;
+    VkDeviceMemory ViewProjectionBufferMemory;
+    void *ViewProjectionBufferMapped;
+
+    VkBuffer *ModelBuffers0;
+    VkDeviceMemory *ModelBuffersMemory0;
+    void **ModelBuffersMapped0;
+
+    VkBuffer *ModelBuffers1;
+    VkDeviceMemory *ModelBuffersMemory1;
+    void **ModelBuffersMapped1;
+
+
+
+
+
+
     VkBuffer VertexBuffer;
     VkDeviceMemory VertexBufferMemory;
-    
-    u32 IndexCount;
-    u32 IndicesSize;
-    u32 *Indices;
     VkBuffer IndexBuffer;
     VkDeviceMemory IndexBufferMemory;
     
@@ -130,9 +142,8 @@ struct vulkan_context
     VkImageView DepthImageView;
 };
 
-struct uniform_buffer_object
+struct view_projection_matrices
 {
-    glm::mat4 Model;
     glm::mat4 View;
     glm::mat4 Projection;
 };

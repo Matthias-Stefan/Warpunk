@@ -6,6 +6,7 @@
 
 #include "source/core/math.h"
 #include "source/core/queue.h"
+#include "source/platform/asset.h"
 
 #include "warpunk_world.h"
 #include "warpunk_camera.h"
@@ -18,6 +19,12 @@ struct game_state
 
 struct entity
 {
+    char *Name;
+    uuid Id;
+
+    glm::mat4 Transform = glm::mat4(1);
+    asset *Asset;
+#if true
     s32 ID;
     b32 IsSelected;
     glm::vec3 Pos;
@@ -32,6 +39,7 @@ struct entity
     glm::vec3 Velocity;
     
     static_queue<glm::vec3, 256> QueuedPos;
+#endif
 };
 
 struct aabb

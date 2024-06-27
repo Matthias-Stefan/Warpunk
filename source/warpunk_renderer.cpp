@@ -6,6 +6,7 @@
 #include "warpunk_camera.h"
 #include "warpunk_renderer.h"
 
+#include "source/platform/asset.h"
 #include "source/platform/platform.h"
 
 #include <vector>
@@ -633,6 +634,7 @@ CreateRenderPass(vulkan_context *VulkanContext)
 inline void
 DEBUGGetVertices(vulkan_context *VulkanContext)
 {
+#if false
     u32 VertexCount = 8;
     
     
@@ -695,6 +697,7 @@ DEBUGGetVertices(vulkan_context *VulkanContext)
     VulkanContext->Indices[9] = 6;
     VulkanContext->Indices[10] = 7;
     VulkanContext->Indices[11] = 4;
+#endif
 }
 
 internal void
@@ -1108,7 +1111,7 @@ CopyVkBuffer(vulkan_context *VulkanContext,
 internal void
 CreateVertexBuffer(vulkan_context *VulkanContext)
 {
-    VkDeviceSize DeviceSize = VulkanContext->VerticesSize;
+    VkDeviceSize DeviceSize = VulkanContext->AssetArena.VertexCount * sizeof(vertex);
     
     VkBuffer StagingBuffer = {};
     VkDeviceMemory StagingBufferMemory;
@@ -1126,7 +1129,7 @@ CreateVertexBuffer(vulkan_context *VulkanContext)
                 DeviceSize, 
                 0, 
                 &Data);
-    CopyArray(VulkanContext->Vertices, 
+    CopyArray(VulkanContext->AssetArena.Vertices.Data,
               Data,
               DeviceSize);
     vkUnmapMemory(VulkanContext->Device, 
@@ -1147,7 +1150,7 @@ CreateVertexBuffer(vulkan_context *VulkanContext)
 internal void
 CreateIndexBuffer(vulkan_context *VulkanContext)
 {
-    VkDeviceSize DeviceSize = VulkanContext->IndicesSize;
+    VkDeviceSize DeviceSize = VulkanContext->AssetArena.IndexCount * sizeof(u32);
     
     VkBuffer StagingBuffer = {};
     VkDeviceMemory StagingBufferMemory;
@@ -1165,7 +1168,7 @@ CreateIndexBuffer(vulkan_context *VulkanContext)
                 DeviceSize, 
                 0, 
                 &Data);
-    CopyArray(VulkanContext->Indices, 
+    CopyArray(VulkanContext->AssetArena.Indices.Data,
               Data,
               DeviceSize);
     vkUnmapMemory(VulkanContext->Device, 
@@ -1280,7 +1283,7 @@ RecordCommandBuffer(vulkan_context *VulkanContext,
                             0, 
                             0);
     
-    vkCmdDrawIndexed(CommandBuffer, VulkanContext->IndexCount, 1, 0, 0, 0);
+    vkCmdDrawIndexed(CommandBuffer, VulkanContext->AssetArena.IndexCount, 1, 0, 0, 0);
     
 #if WARPUNK_DEBUG
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), VulkanContext->CommandBuffers[CurrentFrame]);
@@ -1337,7 +1340,7 @@ CreateSyncObjects(vulkan_context *VulkanContext)
 internal void
 CreateUniformBuffers(vulkan_context *VulkanContext)
 {
-    VkDeviceSize DeviceSize = sizeof(uniform_buffer_object);
+    VkDeviceSize DeviceSize = sizeof(view_projection_matrices);
     
     VulkanContext->UniformBuffers =
         VulkanContext->GraphicsMemoryBlock->PushArray<VkBuffer>(MAX_FRAMES_IN_FLIGHT);
@@ -1425,7 +1428,7 @@ CreateDescriptorSets(vulkan_context *VulkanContext)
         VkDescriptorBufferInfo BufferInfo = {};
         BufferInfo.buffer = VulkanContext->UniformBuffers[UpdateIndex];
         BufferInfo.offset = 0;
-        BufferInfo.range = sizeof(uniform_buffer_object);
+        BufferInfo.range = sizeof(view_projection_matrices);
         
         VkDescriptorImageInfo ImageInfo = {};
         ImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1459,7 +1462,7 @@ UpdateUniformBuffer(vulkan_context *VulkanContext,
                     u32 CurrentImage,
                     camera *Camera)
 {
-    uniform_buffer_object UniformBufferObject = {};
+    view_projection_matrices UniformBufferObject = {};
     
     UniformBufferObject.Model = glm::rotate(glm::mat4(1.0f), 
                                             glm::radians(10.0f),
@@ -1693,70 +1696,6 @@ CopyBufferToImage(VkBuffer Buffer,
     EndSingleTimeCommands(VulkanContext, CommandBuffer);
 }
 
-internal void 
-CreateTextureImage(vulkan_context *VulkanContext, asset *Asset)
-{
-    texture *Texture = &Asset->Textures[0];
-
-    VkDeviceSize ImageSize = Texture->Width * Texture->Height * 4;
-
-    VkBuffer StagingBuffer = {};
-    VkDeviceMemory StagingBufferMemory = {};
-
-    CreateBuffer(VulkanContext,
-                 ImageSize,
-                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                 &StagingBuffer,
-                 &StagingBufferMemory);
-
-    void *Data;
-    vkMapMemory(VulkanContext->Device,
-                StagingBufferMemory,
-                0,
-                ImageSize,
-                0,
-                &Data);
-
-    CopyArray(Texture->Data, Data, ImageSize);
-    vkUnmapMemory(VulkanContext->Device, StagingBufferMemory);
-
-    CreateImage(VulkanContext,
-                Texture->Width,
-                Texture->Height,
-                VK_FORMAT_R8G8B8A8_SRGB,
-                VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                &VulkanContext->TextureImage,
-                &VulkanContext->TextureImageMemory);
-
-    TransitionImageLayout(VulkanContext,
-                          VulkanContext->TextureImage,
-                          VK_FORMAT_R8G8B8A8_SRGB,
-                          VK_IMAGE_LAYOUT_UNDEFINED,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-
-    CopyBufferToImage(StagingBuffer,
-                      VulkanContext->TextureImage,
-                      (u32)Texture->Width,
-                      (u32)Texture->Height,
-                      VulkanContext);
-
-    TransitionImageLayout(VulkanContext,
-                          VulkanContext->TextureImage,
-                          VK_FORMAT_R8G8B8A8_SRGB,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-    vkDestroyBuffer(VulkanContext->Device,
-                    StagingBuffer,
-                    0);
-    vkFreeMemory(VulkanContext->Device,
-                 StagingBufferMemory,
-                 0);
-}
-
 internal void
 CreateTextureImage(vulkan_context *VulkanContext, char *TexturePath)
 {
@@ -1914,6 +1853,7 @@ RecreateSwapChain(vulkan_context *VulkanContext,
 internal void
 LoadModel(vulkan_context *VulkanContext, char *ModelPath)
 {
+#if false
     tinyobj::attrib_t Attrib;
     std::vector<tinyobj::shape_t> Shapes;
     std::vector<tinyobj::material_t> Materials;
@@ -1963,6 +1903,7 @@ LoadModel(vulkan_context *VulkanContext, char *ModelPath)
     VulkanContext->IndicesSize = sizeof(u32) * IndexCount;
     VulkanContext->Indices = VulkanContext->GraphicsMemoryBlock->PushArray<u32>(IndexCount);
     CopyArray(Indices.data(), VulkanContext->Indices, VulkanContext->IndicesSize);
+#endif
 }
 
 internal void

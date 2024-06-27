@@ -44,29 +44,36 @@ struct pbr_material
     f32 RoughnessFactor;
 };
 
-struct mesh
+struct asset_resources_buffer_view
 {
-    u32 VertextCount;
-    u32 VerticesSize;
-    vertex *Vertices;
+    size_t BufferIndex;
+    size_t ByteOffset;
+    size_t Count;
+};
 
-    u32 IndexCount;
-    u32 IndicesSize;
-    u32 *Indices;
-
-    u32 MaterialIndex;
+struct asset_loading_info
+{
+    char *Name;
+    char *ModelFilepath;
+    char *TextureFilepath;
 };
 
 struct asset
 {
-    size_t Id;
-    size_t Size = sizeof(asset);
+    asset_resources_buffer_view Vertices;
+    asset_resources_buffer_view Indices;
+    asset_resources_buffer_view Textures;
+    asset_resources_buffer_view Materials;
+};
 
-    size_t MeshCount;
-    size_t MaterialCount;
+struct asset_arena
+{
+    size_t VertexCount;
+    typed_memory_block<vertex> Vertices;
+    size_t IndexCount;
+    typed_memory_block<u32> Indices;
     size_t TextureCount;
-    
-    mesh *Meshes;
-    pbr_material *Material;
-    texture *Textures;
+    typed_memory_block<texture> Textures;
+    size_t MaterialCount;
+    typed_memory_block<pbr_material> Materials;
 };

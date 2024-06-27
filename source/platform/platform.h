@@ -2,7 +2,6 @@
 
 #include "source/core/types.h"
 #include "source/core/util.h"
-#include "source/platform/asset.h"
 #include "source/platform/mouse.h"
 #include "source/platform/keyboard.h"
 #include "source/platform/thread_pool.h"
@@ -68,29 +67,28 @@ typedef PLATFORM_ENLARGE_MEMORY(platform_enlarge_memory);
 
 /// Audio services
 
-// TODO(matthias) implemention
 #define PLATFORM_INITIALIZE_AUDIO(name) void name()
 typedef PLATFORM_INITIALIZE_AUDIO(platform_initialize_audio);
 
-// TODO(matthias) implemention
 #define PLATFORM_PREPARE_AUDIO(name) void name()
 typedef PLATFORM_PREPARE_AUDIO(platform_prepare_audio);
 
-// TODO(matthias) implemention
 #define PLATFORM_PLAY_AUDIO(name) void name()
 typedef PLATFORM_PLAY_AUDIO(platform_play_audio);
 
-// TODO(matthias) implemention
 #define PLATFORM_STOP_AUDIO(name) void name()
 typedef PLATFORM_STOP_AUDIO(platform_stop_audio);
 
-// TODO(matthias) implemention
 #define PLATFORM_GET_AUDIO_SAMPLE(name) void name()
 typedef PLATFORM_GET_AUDIO_SAMPLE(platform_get_audio_sample);
 
 /// Asset loading services
 
-#define PLATFORM_LOAD_ASSET(name) asset* name(char *Filename, memory_block *Memory)
+struct asset_loading_info;
+struct asset;
+struct asset_arena;
+
+#define PLATFORM_LOAD_ASSET(name) asset name(asset_loading_info *LoadingInfo, asset_arena *Arena)
 typedef PLATFORM_LOAD_ASSET(platform_load_asset);
 
 #define PLATFORM_UNLOAD_ASSET(name) void name(asset *Asset)
@@ -210,11 +208,14 @@ struct memory_block
 };
 
 template<typename T>
-struct temporary_memory_block
+struct typed_memory_block
 {
     memory_block Memory;
     T *Data = (T *)Memory.Data;
 };
+
+template<typename T>
+using temporary_memory_block = typed_memory_block<T>;
 
 template<typename T>
 internal void

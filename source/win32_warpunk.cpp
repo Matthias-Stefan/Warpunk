@@ -202,6 +202,15 @@ Win32InitializeVulkan(HDC DeviceContext, HWND Window, HINSTANCE Instance, memory
     VulkanContext.GraphicsMemoryBlock = RendererMemory; 
     VulkanContext.PlatformAPI = PlatformAPI;
 
+    PlatformAPI->AllocateMemory(&VulkanContext.AssetArena.Vertices.Memory, MB(512));
+    VulkanContext.AssetArena.Vertices.Data = (vertex *)VulkanContext.AssetArena.Vertices.Memory.Data;
+    PlatformAPI->AllocateMemory(&VulkanContext.AssetArena.Indices.Memory, MB(512));
+    VulkanContext.AssetArena.Indices.Data = (u32 *)VulkanContext.AssetArena.Indices.Memory.Data;
+    PlatformAPI->AllocateMemory(&VulkanContext.AssetArena.Textures.Memory, MB(512));
+    VulkanContext.AssetArena.Textures.Data = (texture *)VulkanContext.AssetArena.Textures.Memory.Data;
+    PlatformAPI->AllocateMemory(&VulkanContext.AssetArena.Materials.Memory, MB(512));
+    VulkanContext.AssetArena.Materials.Data = (pbr_material *)VulkanContext.AssetArena.Materials.Memory.Data;
+
     //DEBUGGetVertices(&VulkanContext); 
     
     CreateInstance(&VulkanContext);
@@ -223,73 +232,23 @@ Win32InitializeVulkan(HDC DeviceContext, HWND Window, HINSTANCE Instance, memory
     CreateDepthResources(&VulkanContext);
     CreateFramebuffers(&VulkanContext);
     CreateCommandPool(&VulkanContext);
-#if false
-    asset *Asset = Win32LoadAsset("W:/Warpunk/assets/gltf/double_cheeseburger.glb", RendererMemory);
+#if true
+    asset_loading_info AssetLoadingInfo = {};
+    AssetLoadingInfo.Name = "Test";
+    AssetLoadingInfo.ModelFilepath = "W:/Warpunk/assets/geo/floor.obj";
+    AssetLoadingInfo.TextureFilepath = nullptr;
+    asset Asset = Win32LoadAsset(&AssetLoadingInfo, &VulkanContext.AssetArena);
 
-    size_t AllocationSize = 0;
-    for (size_t MeshIndex = 0; 
-         MeshIndex < Asset->MeshCount; 
-         ++MeshIndex)
-    {
-        AllocationSize += Asset->Meshes[MeshIndex].VerticesSize;
-    }
+    AssetLoadingInfo.Name = "Wolf";
+    AssetLoadingInfo.ModelFilepath = "W:/Warpunk/assets/geo/Wolf_obj.obj";
+    AssetLoadingInfo.TextureFilepath = nullptr;
+    asset Asset2 = Win32LoadAsset(&AssetLoadingInfo, &VulkanContext.AssetArena);
 
-    size_t VertexCount = 0;
-    vertex *Vertices = RendererMemory->PushArray<vertex>(AllocationSize);
-    for (size_t MeshIndex = 0, Offset = 0;
-         MeshIndex < Asset->MeshCount;
-         ++MeshIndex)
-    {
-        mesh *Mesh = &Asset->Meshes[MeshIndex];
-
-        CopyArray(Mesh->Vertices,
-                  Vertices + Offset, 
-                  Mesh->VerticesSize);
-        
-        VertexCount += Mesh->VertextCount;
-        Offset += Mesh->VerticesSize;
-    }
-
-    VulkanContext.VertexCount = VertexCount;
-    VulkanContext.VerticesSize = VertexCount * sizeof(vertex);
-    VulkanContext.Vertices = Vertices;
-
-    AllocationSize = 0;
-    for (size_t MeshIndex = 0;
-         MeshIndex < Asset->MeshCount;
-         ++MeshIndex)
-    {
-        AllocationSize += Asset->Meshes[MeshIndex].IndicesSize;
-    }
-
-    size_t IndexCount = 0;
-    u32 *Indices = RendererMemory->PushArray<u32>(AllocationSize);
-    for (size_t MeshIndex = 0, Offset = 0;
-         MeshIndex < Asset->MeshCount;
-         ++MeshIndex)
-    {
-        mesh *Mesh = &Asset->Meshes[MeshIndex];
-
-        CopyArray(Mesh->Vertices,
-                  Indices + Offset,
-                  Mesh->VerticesSize);
-
-        IndexCount += Mesh->IndexCount;
-        Offset += Mesh->IndicesSize;
-    }
-
-
-    VulkanContext.IndexCount = IndexCount;
-    VulkanContext.IndicesSize = IndexCount * sizeof(u32);
-    VulkanContext.Indices = Indices;
-
-    CreateTextureImage(&VulkanContext, Asset);
+    CreateTextureImage(&VulkanContext, "W:/Warpunk/assets/textures/viking_room.png");
+    //CreateTextureImage(&VulkanContext, "W:/Warpunk/assets/textures/Wolf_Body.jpg");
     CreateTextureImageView(&VulkanContext);
     CreateTextureSampler(&VulkanContext);
 #else
-    CreateTextureImage(&VulkanContext, "W:/Warpunk/assets/textures/viking_room.png");
-    CreateTextureImageView(&VulkanContext);
-    CreateTextureSampler(&VulkanContext);
     LoadModel(&VulkanContext, "W:/Warpunk/assets/geo/untitled.obj");
 #endif
 
@@ -1111,516 +1070,78 @@ internal PLATFORM_ENLARGE_MEMORY(Win32EnlargeMemory)
 
 /// Asset loading services
 
-inline u32
-glTFGetComponentSize(s32 ComponentType)
-{
-    u32 Result = 0;
-
-    switch (ComponentType)
-    {
-        case TINYGLTF_COMPONENT_TYPE_BYTE:
-        {
-            Result = sizeof(char);
-        } break;
-        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
-        {
-            Result = sizeof(unsigned char);
-        } break;
-        case TINYGLTF_COMPONENT_TYPE_SHORT:
-        {
-            Result = sizeof(short);
-        } break;
-        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
-        {
-            Result = sizeof(unsigned short);
-        } break;
-        case TINYGLTF_COMPONENT_TYPE_INT:
-        {
-            Result = sizeof(int);
-        } break;
-        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
-        {
-            Result = sizeof(unsigned int);
-        } break;
-        case TINYGLTF_COMPONENT_TYPE_FLOAT:
-        {
-            Result = sizeof(float);
-        } break;
-        case TINYGLTF_COMPONENT_TYPE_DOUBLE:
-        {
-            Result = sizeof(double);
-        } break;
-    }
-
-    return Result;
-}
-
-template <typename T, typename S>
-inline S
-glTFGetBufferValue_(tinygltf::Buffer *Buffer,
-                    tinygltf::BufferView *BufferView,
-                    size_t Index)
-{
-    S Result = static_cast<S>(*reinterpret_cast<T *>(&Buffer->data[Index]));
-    return Result;
-}
-
-template <typename S>
-inline S
-glTFGetBufferValue(s32 ComponentType,
-                   tinygltf::Buffer *Buffer,
-                   tinygltf::BufferView *BufferView,
-                   size_t Index)
-{
-    S Result;
-
-    switch (ComponentType)
-    {
-        case TINYGLTF_COMPONENT_TYPE_BYTE:
-        {
-            Result = glTFGetBufferValue_<char, S>(Buffer, BufferView, Index);
-        } break;
-        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
-        {
-            Result = glTFGetBufferValue_<unsigned char, S>(Buffer, BufferView, Index);
-        } break;
-        case TINYGLTF_COMPONENT_TYPE_SHORT:
-        {
-            Result = glTFGetBufferValue_<short, S>(Buffer, BufferView, Index);
-        } break;
-        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
-        {
-            Result = glTFGetBufferValue_<unsigned short, S>(Buffer, BufferView, Index);
-        } break;
-        case TINYGLTF_COMPONENT_TYPE_INT:
-        {
-            Result = glTFGetBufferValue_<int, S>(Buffer, BufferView, Index);
-        } break;
-        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
-        {
-            Result = glTFGetBufferValue_<unsigned int, S>(Buffer, BufferView, Index);
-        } break;
-        case TINYGLTF_COMPONENT_TYPE_FLOAT:
-        {
-            Result = glTFGetBufferValue_<float, S>(Buffer, BufferView, Index);
-        } break;
-        case TINYGLTF_COMPONENT_TYPE_DOUBLE:
-        {
-            Result = glTFGetBufferValue_<double, S>(Buffer, BufferView, Index);
-        } break;
-    }
-
-    return Result;
-}
-
 internal PLATFORM_LOAD_ASSET(Win32LoadAsset)
 {
-#if true
-    tinygltf::TinyGLTF TinyLoader;
+    asset Result = {};
 
-    std::string Error;
-    std::string Warning;
-    tinygltf::Model TinyModel;
-    if (!TinyLoader.LoadBinaryFromFile(&TinyModel, &Error, &Warning, Filename))
+    tinyobj::attrib_t Attrib;
+    std::vector<tinyobj::shape_t> Shapes;
+    std::vector<tinyobj::material_t> Materials;
+    std::string Warn;
+    std::string Err;
+
+    if (!tinyobj::LoadObj(&Attrib, &Shapes, &Materials, &Warn, &Err, LoadingInfo->ModelFilepath))
     {
-        Win32ErrorMessage(PlatformError_Nonfatal, "Failed to load gltf.");
+        Win32ErrorMessage(PlatformError_Fatal, "Failed to load object.");
     }
-#endif
-
-    asset *Result = Memory->PushStruct<asset>();
-    *Result = {};
-    Result->Id = 0;
     
-    u32 MeshCount = 0;
-    for (size_t NodeIndex = 0; NodeIndex < TinyModel.nodes.size(); ++NodeIndex)
+    size_t AllocationSize = 0;
+    for (size_t ShapeIndex = 0; ShapeIndex < Shapes.size(); ++ShapeIndex)
     {
-        tinygltf::Node TinyNode = TinyModel.nodes[NodeIndex];
-
-        if (TinyNode.mesh < 0) // this node is not a mesh
-        {
-            continue;
-        }
-
-        MeshCount++;
+        AllocationSize += Shapes[ShapeIndex].mesh.indices.size();
     }
 
-    Result->Meshes = Memory->PushArray<mesh>(MeshCount);
-    Result->Size += sizeof(mesh) * MeshCount;
+    temporary_memory_block<vertex> VerticesTemp;
+    temporary_memory_block<u32> IndicesTemp;
+    StartTemporaryMemory(&VerticesTemp, AllocationSize, Win32AllocateMemory);
+    StartTemporaryMemory(&IndicesTemp, AllocationSize, Win32AllocateMemory);
 
-    for (size_t NodeIndex = 0, AssetIndex = 0;
-         NodeIndex < TinyModel.nodes.size();
-         ++NodeIndex)
+    size_t VertexCount = 0;
+    size_t IndexCount = 0;
+    for (const auto &Shape : Shapes)
     {
-        tinygltf::Node TinyNode = TinyModel.nodes.at(NodeIndex);
-
-        if (TinyNode.mesh < 0) // this node is not a mesh
+        for (const auto &Index : Shape.mesh.indices) 
         {
-            continue;
-        }
+            vertex *Vertex = VerticesTemp.Memory.PushStruct<vertex>();
+            VertexCount++;
 
-        glm::mat4 Matrix(1.0f);
-        if (TinyNode.matrix.size() > 0) // no identity matrix
-        {
-            Assert(TinyNode.matrix.size() == 16);
+            Vertex->Pos = {
+                Attrib.vertices[3 * Index.vertex_index + 0],
+                Attrib.vertices[3 * Index.vertex_index + 1],
+                Attrib.vertices[3 * Index.vertex_index + 2]
+            };
 
-            Matrix[0][0] = (f32)TinyNode.matrix[0];
-            Matrix[0][1] = (f32)TinyNode.matrix[1];
-            Matrix[0][2] = (f32)TinyNode.matrix[2];
-            Matrix[0][3] = (f32)TinyNode.matrix[3];
+            Vertex->TexCoord0 = {
+                Attrib.texcoords[2 * Index.texcoord_index + 0],
+                1.0f - Attrib.texcoords[2 * Index.texcoord_index + 1]
+            };
 
-            Matrix[1][0] = (f32)TinyNode.matrix[4];
-            Matrix[1][1] = (f32)TinyNode.matrix[5];
-            Matrix[1][2] = (f32)TinyNode.matrix[6];
-            Matrix[1][3] = (f32)TinyNode.matrix[7];
+            Vertex->Color = { 1.0f, 1.0f, 1.0f, 1.0f };
 
-            Matrix[2][0] = (f32)TinyNode.matrix[8];
-            Matrix[2][1] = (f32)TinyNode.matrix[9];
-            Matrix[2][2] = (f32)TinyNode.matrix[10];
-            Matrix[2][3] = (f32)TinyNode.matrix[11];
-
-            Matrix[3][0] = (f32)TinyNode.matrix[12];
-            Matrix[3][1] = (f32)TinyNode.matrix[13];
-            Matrix[3][2] = (f32)TinyNode.matrix[14];
-            Matrix[3][3] = (f32)TinyNode.matrix[15];
-        }
-        else
-        {
-            glm::mat4 MatrixScale(1.0f);
-            glm::mat4 MatrixRotation(1.0f);
-            glm::mat4 MatrixTranslation(1.0f);
-
-            if (TinyNode.scale.size() > 0) // no identity matrix
-            {
-                assert(TinyNode.scale.size() == 3);
-                MatrixScale = glm::scale(glm::mat4(1.0f),
-                                         glm::vec3((f32)TinyNode.scale[0],
-                                                   (f32)TinyNode.scale[1],
-                                                   (f32)TinyNode.scale[2]));
-            }
-
-            if (TinyNode.rotation.size() > 0) // no identity matrix
-            {
-                assert(TinyNode.rotation.size() == 4);
-                MatrixRotation = glm::mat4_cast(
-                    glm::quat((f32)TinyNode.rotation[3],
-                              (f32)TinyNode.rotation[0],
-                              (f32)TinyNode.rotation[1],
-                              (f32)TinyNode.rotation[2]));
-            }
-
-            if (TinyNode.translation.size() > 0) // no identity matrix
-            {
-                assert(TinyNode.translation.size() == 3);
-                MatrixTranslation = glm::translate(glm::mat4(1.0f),
-                                                   glm::vec3((f32)TinyNode.translation[0],
-                                                             (f32)TinyNode.translation[1],
-                                                             (f32)TinyNode.translation[2]));
-            }
-
-            Matrix = MatrixTranslation * MatrixRotation * MatrixScale;
-        }
-
-        s32 MeshIndex = TinyNode.mesh;
-        tinygltf::Mesh TinyMesh = TinyModel.meshes.at(MeshIndex);
-
-        mesh *Mesh = &Result->Meshes[AssetIndex++];
-        Result->MeshCount++;
-
-        temporary_memory_block<u32> Indices = {};
-        temporary_memory_block<f32> Positions = {};
-        temporary_memory_block<f32> Normals = {};
-        temporary_memory_block<f32> Tangents = {};
-        temporary_memory_block<f32> UVs = {};
-        temporary_memory_block<f32> UVs2 = {};
-
-        for (size_t PrimitiveIndex = 0; 
-             PrimitiveIndex < TinyMesh.primitives.size(); 
-             ++PrimitiveIndex)
-        {
-            tinygltf::Primitive& TinyPrimitive = TinyMesh.primitives[PrimitiveIndex];
-            const auto PositionIt = TinyPrimitive.attributes.find("POSITION");
-            const auto NormalIt = TinyPrimitive.attributes.find("NORMAL");
-            const auto TangentIt = TinyPrimitive.attributes.find("TANGENT");
-            const auto Texcoord0It = TinyPrimitive.attributes.find("TEXCOORD_0");
-            const auto Texcoord1It = TinyPrimitive.attributes.find("TEXCOORD_1");
-
-            const bool HasPosition = PositionIt != TinyPrimitive.attributes.end();
-            const bool HasNormal = NormalIt != TinyPrimitive.attributes.end();
-            const bool HasTangent = TangentIt != TinyPrimitive.attributes.end();
-            const bool HasTexcoord0 = Texcoord0It != TinyPrimitive.attributes.end();
-            const bool HasTexcoord1 = Texcoord1It != TinyPrimitive.attributes.end();
-
-            if (TinyPrimitive.indices > 0 &&
-                HasPosition &&
-                HasNormal)
-            {
-                s32 Idx = -1;
-
-                // Indices
-                Idx = TinyPrimitive.indices;
-                Assert(Idx >= 0);
-
-                size_t IndexCount = TinyModel.accessors[Idx].count;
-
-                tinygltf::Accessor Accessor = TinyModel.accessors[Idx];
-                tinygltf::BufferView BufferView = TinyModel.bufferViews[Accessor.bufferView];
-                tinygltf::Buffer Buffer = TinyModel.buffers[BufferView.buffer];
-                
-                s32 AccessorSize = 1; // u32
-                s32 ComponentSize = glTFGetComponentSize(Accessor.componentType);
-                EnlargeTemporaryMemory(&Indices, Accessor.count * AccessorSize, Win32EnlargeMemory);
-
-                size_t StartIndex = BufferView.byteOffset + Accessor.byteOffset;
-                for (size_t BufferIndex = StartIndex;
-                     BufferIndex < StartIndex + Accessor.count * ComponentSize * AccessorSize;
-                     BufferIndex += ComponentSize)
-                {
-                    u32 Index = glTFGetBufferValue<u32>(Accessor.componentType, 
-                                                        &Buffer, 
-                                                        &BufferView, 
-                                                        BufferIndex);
-                    u32 *pIndices = Indices.Memory.PushStruct<u32>();
-                    *pIndices = Index;
-                }
-
-                Mesh->IndexCount = IndexCount;
-                Mesh->IndicesSize = sizeof(u32) * IndexCount;
-                Mesh->Indices = Memory->PushArray<u32>(IndexCount);
-                Result->Size += Mesh->IndicesSize;
-                CopyArray(Indices.Data, Mesh->Indices, Mesh->IndicesSize);
-
-                // Position
-                Idx = PositionIt->second;
-                Assert(Idx >= 0);
-
-                size_t VertexCount = TinyModel.accessors[PositionIt->second].count;
-
-                Accessor = TinyModel.accessors[Idx];
-                BufferView = TinyModel.bufferViews[Accessor.bufferView];
-                Buffer = TinyModel.buffers[BufferView.buffer];
-
-                AccessorSize = 3; // vec3
-                ComponentSize = glTFGetComponentSize(Accessor.componentType);
-                EnlargeTemporaryMemory(&Positions, Accessor.count * AccessorSize, Win32EnlargeMemory);
-
-                StartIndex = BufferView.byteOffset + Accessor.byteOffset;
-                size_t IdxDEBUG = 0;
-                for (size_t BufferIndex = StartIndex;
-                     BufferIndex < StartIndex + Accessor.count * ComponentSize * AccessorSize;
-                     BufferIndex += ComponentSize, ++IdxDEBUG)
-                {
-                    f32 Position = glTFGetBufferValue<f32>(Accessor.componentType, 
-                                                           &Buffer,
-                                                           &BufferView,
-                                                           BufferIndex);
-                    f32 *pPosition = Positions.Memory.PushStruct<f32>();
-                    *pPosition = Position;
-                }
-
-                Mesh->VertextCount = VertexCount;
-                Mesh->VerticesSize = sizeof(f32) * VertexCount;
-                Mesh->Vertices = Memory->PushArray<vertex>(VertexCount);
-                Result->Size += Mesh->VerticesSize;
-
-                // Normals
-                Idx = NormalIt->second;
-                Assert(Idx >= 0);
-                
-                Accessor = TinyModel.accessors[Idx];
-                BufferView = TinyModel.bufferViews[Accessor.bufferView];
-                Buffer = TinyModel.buffers[BufferView.buffer];
-
-                AccessorSize = 3; // vec3
-                ComponentSize = glTFGetComponentSize(Accessor.componentType);
-                EnlargeTemporaryMemory(&Normals, Accessor.count * AccessorSize, Win32EnlargeMemory);
-
-                StartIndex = BufferView.byteOffset + Accessor.byteOffset;
-                for (size_t BufferIndex = StartIndex;
-                     BufferIndex < StartIndex + Accessor.count * ComponentSize * AccessorSize;
-                     BufferIndex += ComponentSize)
-                {
-                    f32 Normal = glTFGetBufferValue<f32>(Accessor.componentType,
-                                                         &Buffer,
-                                                         &BufferView,
-                                                         BufferIndex);
-                    f32 *pNormal = Normals.Memory.PushStruct<f32>();
-                    *pNormal = Normal;
-                }
-
-                // Tangents
-                if (HasTangent)
-                {
-                    Idx = TangentIt->second;
-                    Assert(Idx >= 0);
-
-                    Accessor = TinyModel.accessors[Idx];
-                    BufferView = TinyModel.bufferViews[Accessor.bufferView];
-                    Buffer = TinyModel.buffers[BufferView.buffer];
-
-                    AccessorSize = 4; // vec4
-                    ComponentSize = glTFGetComponentSize(Accessor.componentType);
-                    EnlargeTemporaryMemory(&Tangents, VertexCount * AccessorSize, Win32EnlargeMemory);
-
-                    StartIndex = BufferView.byteOffset + Accessor.byteOffset;
-                    for (size_t BufferIndex = StartIndex;
-                         BufferIndex < StartIndex + Accessor.count * ComponentSize * AccessorSize;
-                         BufferIndex += ComponentSize)
-                    {
-                        f32 Tangent = glTFGetBufferValue<f32>(Accessor.componentType,
-                                                              &Buffer,
-                                                              &BufferView,
-                                                              BufferIndex);
-                        f32 *pTangent = Tangents.Memory.PushStruct<f32>();
-                        *pTangent = Tangent;
-                    }
-                }
-
-                // Texcoord0
-                if (HasTexcoord0)
-                {
-
-                    Idx = Texcoord0It->second;
-                    Assert(Idx >= 0);
-                    
-                    Accessor = TinyModel.accessors[Idx];
-                    BufferView = TinyModel.bufferViews[Accessor.bufferView];
-                    Buffer = TinyModel.buffers[BufferView.buffer];
-
-                    AccessorSize = 2; // vec2
-                    ComponentSize = glTFGetComponentSize(Accessor.componentType);
-                    EnlargeTemporaryMemory(&UVs, VertexCount * AccessorSize, Win32EnlargeMemory);
-
-                    StartIndex = BufferView.byteOffset + Accessor.byteOffset;
-                    for (size_t BufferIndex = StartIndex;
-                         BufferIndex < StartIndex + Accessor.count * ComponentSize * AccessorSize;
-                         BufferIndex += ComponentSize)
-                    {
-                        f32 Texcoord0 = glTFGetBufferValue<f32>(Accessor.componentType,
-                                                                &Buffer,
-                                                                &BufferView,
-                                                                BufferIndex);
-                        f32 *pTexcoord0 = UVs.Memory.PushStruct<f32>();
-                        *pTexcoord0 = Texcoord0;
-                    }
-                }
-
-                // Texcoord1
-                if (HasTexcoord1)
-                {
-                    Idx = Texcoord1It->second;
-                    Assert(Idx >= 0);
-
-                    Accessor = TinyModel.accessors[Idx];
-                    BufferView = TinyModel.bufferViews[Accessor.bufferView];
-                    Buffer = TinyModel.buffers[BufferView.buffer];
-
-                    AccessorSize = 2; // vec2
-                    ComponentSize = glTFGetComponentSize(Accessor.componentType);
-                    EnlargeTemporaryMemory(&UVs2, VertexCount *AccessorSize, Win32EnlargeMemory);
-
-                    StartIndex = BufferView.byteOffset + Accessor.byteOffset;
-                    for (size_t BufferIndex = StartIndex;
-                         BufferIndex < StartIndex + Accessor.count * ComponentSize * AccessorSize;
-                         BufferIndex += ComponentSize)
-                    {
-                        f32 Texcoord1 = glTFGetBufferValue<f32>(Accessor.componentType,
-                                                                &Buffer,
-                                                                &BufferView,
-                                                                BufferIndex);
-                        f32 *pTexcoord1 = UVs2.Memory.PushStruct<f32>();
-                        *pTexcoord1 = Texcoord1;
-                    }
-                }
-
-                for (size_t VertexIndex = 0; VertexIndex < VertexCount; ++VertexIndex)
-                {
-                    u64 FourElementsProp[4] =
-                    {
-                        4 * VertexIndex,
-                        4 * VertexIndex + 1,
-                        4 * VertexIndex + 2,
-                        4 * VertexIndex + 3
-                    };
-
-                    u64 ThreeElementsProp[3] =
-                    {
-                        3 * VertexIndex,
-                        3 * VertexIndex + 1,
-                        3 * VertexIndex + 2
-                    };
-
-                    u64 TwoElementsProp[2] =
-                    {
-                        2 * VertexIndex,
-                        2 * VertexIndex + 1
-                    };
-
-                    vertex *Vertex = &Mesh->Vertices[VertexIndex];
-                    if (HasPosition)
-                    {
-                        Vertex->Pos = glm::vec3(Positions.Data[ThreeElementsProp[0]],
-                                                Positions.Data[ThreeElementsProp[1]],
-                                                Positions.Data[ThreeElementsProp[2]]);
-                    }
-                    if (HasNormal)
-                    {
-                        Vertex->Normal = glm::vec3(Normals.Data[ThreeElementsProp[0]],
-                                                   Normals.Data[ThreeElementsProp[1]],
-                                                   Normals.Data[ThreeElementsProp[2]]);
-                    }
-                    if (HasTangent)
-                    {
-                        Vertex->TangentSpace = glm::vec4(Tangents.Data[FourElementsProp[0]],
-                                                         Tangents.Data[FourElementsProp[1]],
-                                                         Tangents.Data[FourElementsProp[2]],
-                                                         Tangents.Data[FourElementsProp[3]]);
-                    }
-                    if (HasTexcoord0)
-                    {
-                        Vertex->TexCoord0 = glm::vec2(UVs.Data[TwoElementsProp[0]],
-                                                      UVs.Data[TwoElementsProp[1]]);
-                    }
-                    if (HasTexcoord1)
-                    {
-                        Vertex->TexCoord1 = glm::vec2(UVs2.Data[TwoElementsProp[0]],
-                                                      UVs2.Data[TwoElementsProp[1]]);
-                    }
-
-                    Mesh->MaterialIndex = TinyPrimitive.material;
-                    ApplyTransform(Vertex, &Matrix);
-                    
-                }
-
-            }
-
-            EndTemporaryMemory(&Indices, Win32DeallocateMemory);
-            EndTemporaryMemory(&Positions, Win32DeallocateMemory);
-            EndTemporaryMemory(&Normals, Win32DeallocateMemory);
-            EndTemporaryMemory(&Tangents, Win32DeallocateMemory);
-            EndTemporaryMemory(&UVs, Win32DeallocateMemory);
-            EndTemporaryMemory(&UVs2, Win32DeallocateMemory);
+            u32 *Index = IndicesTemp.Memory.PushStruct<u32>();
+            *Index = IndexCount++;
         }
     }
 
-    Result->Textures = Memory->PushArray<texture>(TinyModel.textures.size());
-    Result->Size += TinyModel.textures.size() * sizeof(texture);
-    for (u32 TextureIndex = 0; TextureIndex < TinyModel.textures.size(); ++TextureIndex)
-    {
-        Result->TextureCount++;
-        texture *Texture = &Result->Textures[TextureIndex];
+    Result.Vertices = {};
+    Result.Vertices.BufferIndex = 0;
+    Result.Vertices.ByteOffset = Arena->Vertices.Memory.Used;
+    Result.Vertices.Count = VertexCount;
 
-        tinygltf::Image Image = TinyModel.images[TextureIndex];
+    vertex *Vertices = Arena->Vertices.Memory.PushArray<vertex>(VertexCount);
+    Arena->VertexCount += VertexCount;
+    CopyArray(VerticesTemp.Data, Vertices, VertexCount * sizeof(vertex));
 
-        Texture->Width = Image.width;
-        Texture->Height = Image.height;
+    Result.Indices.BufferIndex = 0;
+    Result.Indices.ByteOffset = Arena->Indices.Memory.Used;
+    Result.Indices.Count = IndexCount;
 
-        u8 *TextureData = Memory->PushArray<u8>(Image.image.size());
-        Result->Size += Image.image.size() * sizeof(u8);
-        
-        CopyArray(Image.image.data(), TextureData, Image.image.size());
-        Texture->Data = (void *)TextureData;
-    }
-
+    u32 *Indices = Arena->Indices.Memory.PushArray<u32>(IndexCount);
+    Arena->IndexCount += IndexCount;
+    CopyArray(IndicesTemp.Data, Indices, IndexCount * sizeof(u32));
+    
+    EndTemporaryMemory(&VerticesTemp, Win32DeallocateMemory);
+    EndTemporaryMemory(&IndicesTemp, Win32DeallocateMemory);
 
     return Result;
 }
@@ -1706,14 +1227,14 @@ WinMain(HINSTANCE Instance,
             
             // TODO(matthias): implement platform api call!
             memory_block RendererMemory = {};
-            RendererMemory.Allocated = GB(2);
+            RendererMemory.Allocated = KB(512);
             RendererMemory.Used = 0;
-            RendererMemory.Data = VirtualAlloc(0, GB(2), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+            RendererMemory.Data = VirtualAlloc(0, RendererMemory.Allocated, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 
             memory_block GameMemory = {};
-            GameMemory.Allocated = GB(2);
+            GameMemory.Allocated = KB(512);
             GameMemory.Used = 0;
-            GameMemory.Data = VirtualAlloc(0, GB(2), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+            GameMemory.Data = VirtualAlloc(0, GameMemory.Allocated, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 
             Win32InitializeVulkan(RendererDC, Window, Instance, &RendererMemory, &PlatformAPI);
             Win32InitializeXAudio2();
