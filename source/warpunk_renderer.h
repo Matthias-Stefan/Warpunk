@@ -1,5 +1,4 @@
-#ifndef WARPUNK_RENDERER_H
-#define WARPUNK_RENDERER_H
+#pragma once
 
 #define MAX_FRAMES_IN_FLIGHT 2
 
@@ -140,15 +139,10 @@ struct uniform_buffer_object
 
 struct camera;
 #define RENDERER_DRAW_FRAME(name) void name(vulkan_context *Renderer, \
-glm::vec2 RenderDim, \
-f32 DtFrame, \
-camera *Camera, \
-game_debug_info *GameDebugInfo)
+                                            glm::vec2 RenderDim, \
+                                            f32 DtFrame, \
+                                            camera *Camera, \
+                                            game_debug_info *GameDebugInfo)
 typedef RENDERER_DRAW_FRAME(renderer_draw_frame);
 
-
-
-
 internal void DrawDebugInfo(game_debug_info *GameDebugInfo);
-
-#endif

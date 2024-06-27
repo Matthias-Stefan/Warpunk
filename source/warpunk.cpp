@@ -62,8 +62,8 @@ extern "C" GAME_UPDATE_AND_RENDER(GameUpdateAndRender)
     temporary_memory_block<entity> Selection;
     StartTemporaryMemory(&Selection, 32, PlatformAPI->AllocateMemory);
 
-    EndTemporaryMemory(&Selection, PlatformAPI->DeallocateMemory);
 
+    EndTemporaryMemory(&Selection, PlatformAPI->DeallocateMemory);
     /// Update camera
     
     if (Input->Mouse.IsPressed(MouseButton_Left))

@@ -1693,6 +1693,70 @@ CopyBufferToImage(VkBuffer Buffer,
     EndSingleTimeCommands(VulkanContext, CommandBuffer);
 }
 
+internal void 
+CreateTextureImage(vulkan_context *VulkanContext, asset *Asset)
+{
+    texture *Texture = &Asset->Textures[0];
+
+    VkDeviceSize ImageSize = Texture->Width * Texture->Height * 4;
+
+    VkBuffer StagingBuffer = {};
+    VkDeviceMemory StagingBufferMemory = {};
+
+    CreateBuffer(VulkanContext,
+                 ImageSize,
+                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                 &StagingBuffer,
+                 &StagingBufferMemory);
+
+    void *Data;
+    vkMapMemory(VulkanContext->Device,
+                StagingBufferMemory,
+                0,
+                ImageSize,
+                0,
+                &Data);
+
+    CopyArray(Texture->Data, Data, ImageSize);
+    vkUnmapMemory(VulkanContext->Device, StagingBufferMemory);
+
+    CreateImage(VulkanContext,
+                Texture->Width,
+                Texture->Height,
+                VK_FORMAT_R8G8B8A8_SRGB,
+                VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                &VulkanContext->TextureImage,
+                &VulkanContext->TextureImageMemory);
+
+    TransitionImageLayout(VulkanContext,
+                          VulkanContext->TextureImage,
+                          VK_FORMAT_R8G8B8A8_SRGB,
+                          VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+    CopyBufferToImage(StagingBuffer,
+                      VulkanContext->TextureImage,
+                      (u32)Texture->Width,
+                      (u32)Texture->Height,
+                      VulkanContext);
+
+    TransitionImageLayout(VulkanContext,
+                          VulkanContext->TextureImage,
+                          VK_FORMAT_R8G8B8A8_SRGB,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    vkDestroyBuffer(VulkanContext->Device,
+                    StagingBuffer,
+                    0);
+    vkFreeMemory(VulkanContext->Device,
+                 StagingBufferMemory,
+                 0);
+}
+
 internal void
 CreateTextureImage(vulkan_context *VulkanContext, char *TexturePath)
 {
@@ -1725,8 +1789,11 @@ CreateTextureImage(vulkan_context *VulkanContext, char *TexturePath)
     
     void *Data;
     vkMapMemory(VulkanContext->Device, 
-                StagingBufferMemory, 0, ImageSize,
-                0, &Data);
+                StagingBufferMemory, 
+                0, 
+                ImageSize,
+                0, 
+                &Data);
     CopyArray(Pixels, Data, ImageSize);
     vkUnmapMemory(VulkanContext->Device, StagingBufferMemory);
     
@@ -1888,7 +1955,6 @@ LoadModel(vulkan_context *VulkanContext, char *ModelPath)
     u32 VertexCount = Vertices.size();
     VulkanContext->VertexCount = VertexCount;
     VulkanContext->VerticesSize = sizeof(vertex) * VertexCount;
-    
     VulkanContext->Vertices = VulkanContext->GraphicsMemoryBlock->PushArray<vertex>(VertexCount);
     CopyArray(Vertices.data(), VulkanContext->Vertices, VulkanContext->VerticesSize);
     
@@ -1896,7 +1962,6 @@ LoadModel(vulkan_context *VulkanContext, char *ModelPath)
     VulkanContext->IndexCount = IndexCount;
     VulkanContext->IndicesSize = sizeof(u32) * IndexCount;
     VulkanContext->Indices = VulkanContext->GraphicsMemoryBlock->PushArray<u32>(IndexCount);
-    
     CopyArray(Indices.data(), VulkanContext->Indices, VulkanContext->IndicesSize);
 }
 

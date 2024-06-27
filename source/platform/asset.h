@@ -49,23 +49,24 @@ struct mesh
     u32 VertextCount;
     u32 VerticesSize;
     vertex *Vertices;
-    //VkBuffer VertexBuffer;
-    //VkDeviceMemory VertexBufferMemory;
 
     u32 IndexCount;
     u32 IndicesSize;
     u32 *Indices;
-    //VkBuffer IndexBuffer;
-    //VkDeviceMemory IndexBufferMemory;
 
-    pbr_material Material;
+    u32 MaterialIndex;
 };
 
 struct asset
 {
-    u64 Id;
-    u64 Size = sizeof(asset);
+    size_t Id;
+    size_t Size = sizeof(asset);
+
+    size_t MeshCount;
+    size_t MaterialCount;
+    size_t TextureCount;
+    
     mesh *Meshes;
+    pbr_material *Material;
+    texture *Textures;
 };
-
-
