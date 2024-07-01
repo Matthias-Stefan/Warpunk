@@ -5,3 +5,4 @@ assets/*
 misc/references
 .vs
 .vs/*
+/source/warpunk.cpp
